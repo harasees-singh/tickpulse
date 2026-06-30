@@ -2,9 +2,9 @@
 // adapter would. To go live later you swap `new MockTicker()` for the real
 // adapter and nothing downstream changes (see DESIGN.md §12).
 
-import type { KiteTick, TickerClient, TickHandler, Mode } from './kite'
+import type { KiteTick, Ticker, TickHandler, Mode } from './kite'
 
-export class MockTicker implements TickerClient {
+export class MockTicker implements Ticker {
   private w: Worker
   private tickHandlers: TickHandler[] = []
   private connectHandlers: Array<() => void> = []

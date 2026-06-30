@@ -67,8 +67,19 @@ const OPEN_VOL: Record<Tier, number> = { L: 4_000_000, M: 1_200_000, S: 300_000 
 // Bump this (or remove the slice below) to stress-test hundreds of symbols.
 export const UNIVERSE_SIZE = 5
 
+// Real Kite instrument_tokens (NSE equity) for the symbols we stream live.
+// (instrument_token = exchange_token*256 + 1 for NSE_CM.) Unmapped names fall
+// back to a synthetic token — fine for the mock, ignored by the live feed.
+const REAL_TOKENS: Record<string, number> = {
+  RELIANCE: 738561,
+  TCS: 2953217,
+  HDFCBANK: 341249,
+  INFY: 408065,
+  ICICIBANK: 1270529
+}
+
 const ALL: SymSpec[] = RAW.map(([name, base, tier], i) => ({
-  token: 100001 + i,
+  token: REAL_TOKENS[name] ?? 100001 + i,
   name,
   exch: 'NSE',
   base,

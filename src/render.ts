@@ -2,7 +2,10 @@
 // snapshot for ONLY the currently-visible (registered) rows and patches the DOM
 // directly. Constant work per frame = O(visible rows), independent of tick rate.
 
-import { ltp, chgPct, cumVol, rvol, alertUntil, alertTier, histVol, histHead, HIST } from './store'
+import {
+  ltp, chgPct, cumVol, rvol, alertUntil, alertTier,
+  buyFlow, sellFlow, histVol, histPrice, prevClose, vwap, histHead, HIST
+} from './store'
 import { fmtPrice, fmtVol } from './format'
 
 export interface RowRefs {
@@ -12,10 +15,14 @@ export interface RowRefs {
   chgEl: HTMLElement
   volEl: HTMLElement
   surgeEl: HTMLElement
-  surgeBar: HTMLElement
+  surgeBuy: HTMLElement
+  surgeSell: HTMLElement
   ctx: CanvasRenderingContext2D
   canvasW: number
   canvasH: number
+  priceCtx: CanvasRenderingContext2D
+  priceW: number
+  priceH: number
   lastLtp: number
   lastVol: number
   lastTier: number
@@ -100,6 +107,85 @@ function drawSpark(r: RowRefs) {
   ctx.stroke()
 }
 
+// Intraday price line, colored green/red by current price vs previous close,
+// with a dotted reference line at the previous close.
+function drawPriceLine(r: RowRefs) {
+  const i = r.idx
+  const ctx = r.priceCtx
+  const W = r.priceW
+  const H = r.priceH
+  ctx.clearRect(0, 0, W, H)
+
+  const head = histHead[i]
+  const pc = prevClose[i]
+  const vw = vwap[i]
+  let lo = pc
+  let hi = pc
+  for (let k = 0; k < HIST; k++) {
+    const v = histPrice[i * HIST + k]
+    if (v > 0) {
+      if (v < lo) lo = v
+      if (v > hi) hi = v
+    }
+  }
+  if (vw > 0) {
+    if (vw < lo) lo = vw
+    if (vw > hi) hi = vw
+  }
+  if (hi - lo < 1e-6) {
+    hi = pc * 1.001
+    lo = pc * 0.999
+  }
+  const pad = (hi - lo) * 0.15
+  lo -= pad
+  hi += pad
+  const yOf = (v: number) => H - 2 - ((v - lo) / (hi - lo)) * (H - 4)
+
+  const up = ltp[i] >= pc
+  const stroke = up ? '#006e12' : '#b02528'
+
+  // dotted previous-close baseline (grey)
+  const yc = yOf(pc)
+  ctx.save()
+  ctx.setLineDash([2, 2])
+  ctx.strokeStyle = 'rgba(114,119,131,0.5)'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.moveTo(0, yc)
+  ctx.lineTo(W, yc)
+  ctx.stroke()
+  // VWAP reference (blue dotted)
+  if (vw > 0) {
+    const yv = yOf(vw)
+    ctx.setLineDash([1, 2])
+    ctx.strokeStyle = 'rgba(0,92,171,0.6)'
+    ctx.beginPath()
+    ctx.moveTo(0, yv)
+    ctx.lineTo(W, yv)
+    ctx.stroke()
+  }
+  ctx.restore()
+
+  // price line (oldest → newest), skipping un-filled samples
+  const stepX = W / (HIST - 1)
+  ctx.beginPath()
+  let started = false
+  for (let k = 0; k < HIST; k++) {
+    const v = histPrice[i * HIST + ((head + k) % HIST)]
+    if (v <= 0) continue
+    const x = k * stepX
+    const y = yOf(v)
+    if (started) ctx.lineTo(x, y)
+    else {
+      ctx.moveTo(x, y)
+      started = true
+    }
+  }
+  ctx.lineWidth = 1.5
+  ctx.strokeStyle = stroke
+  ctx.stroke()
+}
+
 function updateRow(r: RowRefs, now: number) {
   const i = r.idx
 
@@ -122,11 +208,17 @@ function updateRow(r: RowRefs, now: number) {
   }
 
   const rv = rvol[i]
-  const upDown = c >= 0 ? 'up' : 'down'
-  r.surgeEl.textContent = rv.toFixed(2) + 'x'
-  r.surgeEl.className = 'surge-val ' + upDown
-  r.surgeBar.style.width = Math.max(4, Math.min(100, (rv / 4) * 100)) + '%'
-  r.surgeBar.className = 'surge-bar ' + upDown
+  const bf = buyFlow[i]
+  const sf = sellFlow[i]
+  const tot = bf + sf
+  const bp = tot > 0 ? bf / tot : 0.5
+  const flowCls = bp >= 0.55 ? 'up' : bp <= 0.45 ? 'down' : 'flat'
+  r.surgeEl.textContent = rv.toFixed(2) + 'x' + (flowCls === 'up' ? ' ▲' : flowCls === 'down' ? ' ▼' : ' ·')
+  r.surgeEl.className = 'surge-val ' + flowCls
+  // Bar length = surge magnitude; green/red split = buyer- vs seller-initiated.
+  const magPct = Math.max(0, Math.min(100, (rv / 4) * 100))
+  r.surgeBuy.style.width = magPct * bp + '%'
+  r.surgeSell.style.width = magPct * (1 - bp) + '%'
 
   const tier = now < alertUntil[i] ? alertTier[i] : 0
   if (tier !== r.lastTier) {
@@ -137,4 +229,5 @@ function updateRow(r: RowRefs, now: number) {
   }
 
   drawSpark(r)
+  drawPriceLine(r)
 }

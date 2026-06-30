@@ -13,6 +13,7 @@ interface SymState extends SymSpec {
   high: number
   low: number
   prevClose: number
+  target: number // intraday mean-reversion level → gives each symbol a day trend
   nextAt: number // when the next tick is due (ms)
   burstUntil: number // wall-clock ms; > now => bursting
   tbq: number // total buy qty (slow random walk)
@@ -30,6 +31,14 @@ function gaussian(): number {
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x))
 const round2 = (x: number) => Math.round(x * 100) / 100
+
+// Deterministic pseudo-random in [0,1) from an integer, so each symbol keeps a
+// stable day trend across reloads.
+function hash01(n: number): number {
+  let x = ((n + 1) * 2654435761) >>> 0
+  x = (x ^ (x >>> 13)) >>> 0
+  return (x % 100000) / 100000
+}
 
 function makeDepth(price: number, tick: number, median: number): { buy: KiteDepthItem[]; sell: KiteDepthItem[] } {
   const buy: KiteDepthItem[] = []
@@ -50,21 +59,27 @@ export class MockEngine {
 
   constructor(now = Date.now()) {
     this.lastRoll = now
-    this.syms = UNIVERSE.map((s) => ({
-      ...s,
-      price: s.base,
-      lastPriceAt: now,
-      cumVolume: s.openingVolume,
-      avg: s.base,
-      open: s.base,
-      high: s.base,
-      low: s.base,
-      prevClose: s.base,
-      nextAt: now + Math.random() * 200,
-      burstUntil: 0,
-      tbq: s.qtyMedian * 50,
-      tsq: s.qtyMedian * 50
-    }))
+    this.syms = UNIVERSE.map((s, idx) => {
+      // Per-symbol day trend: some up, some down, varied magnitude — so the board
+      // shows a realistic green/red mix instead of clustering at 0%.
+      const dayBias = (hash01(idx) - 0.45) * 0.06 // ≈ -2.7% … +3.3%
+      return {
+        ...s,
+        price: s.base,
+        target: s.base * (1 + dayBias),
+        lastPriceAt: now,
+        cumVolume: s.openingVolume,
+        avg: s.base,
+        open: s.base,
+        high: s.base,
+        low: s.base,
+        prevClose: s.base,
+        nextAt: now + Math.random() * 200,
+        burstUntil: 0,
+        tbq: s.qtyMedian * 50,
+        tsq: s.qtyMedian * 50
+      }
+    })
   }
 
   setRpsScale(x: number) {
@@ -106,7 +121,7 @@ export class MockEngine {
         // --- price: mean-reverting random walk, snapped + circuit-clamped ---
         const dt = clamp((now - s.lastPriceAt) / 1000, 0.001, 1)
         s.lastPriceAt = now
-        const drift = s.theta * (s.base - s.price) * dt
+        const drift = s.theta * (s.target - s.price) * dt
         const shock = s.price * s.sigma * Math.sqrt(dt) * gaussian() * (bursting ? 1.5 : 1)
         let p = s.price + drift + shock
         p = Math.round(p / s.tickSize) * s.tickSize

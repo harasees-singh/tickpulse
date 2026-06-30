@@ -37,17 +37,58 @@ export const volEwma = new Float64Array(N)
 export const volVar = new Float64Array(N)
 export const rvol = new Float64Array(N)
 export const zScore = new Float64Array(N)
+export const buyFlow = new Float64Array(N) // EWMA buyer-initiated volume (tick rule)
+export const sellFlow = new Float64Array(N) // EWMA seller-initiated volume
 const baseInit = new Uint8Array(N)
 const lastAlertAt = new Float64Array(N)
 export const alertUntil = new Float64Array(N)
 export const alertTier = new Uint8Array(N) // 0 none, 1 info, 2 warn, 3 critical
 export const histVol = new Float32Array(N * HIST)
+export const histPrice = new Float32Array(N * HIST)
 export const histHead = new Int32Array(N)
+export const prevClose = new Float64Array(N) // previous-day close (for price line + Chg%)
+export const vwap = new Float64Array(N) // day VWAP (Kite average_traded_price)
 
 // seed so the table shows sensible values before the first tick arrives
-for (let i = 0; i < N; i++) ltp[i] = UNIVERSE[i].base
+for (let i = 0; i < N; i++) {
+  ltp[i] = UNIVERSE[i].base
+  prevClose[i] = UNIVERSE[i].base
+  vwap[i] = UNIVERSE[i].base
+}
 
 const ALPHA = 0.05 // EWMA smoothing for volume mean/variance
+const FLOW_ALPHA = 0.08 // EWMA smoothing for buy/sell order-flow classification
+
+// --- user-configurable "breakout" thresholds (Settings tab) ---
+export interface BreakoutConfig {
+  info: number // z-score for a "Watch" (mild) flag
+  warn: number // z-score for "High"
+  crit: number // z-score for "Spike" (a breakout)
+  cooldownMs: number // min gap between alerts per symbol
+}
+const BREAKOUT_DEFAULTS: BreakoutConfig = { info: 2.5, warn: 3.5, crit: 5, cooldownMs: 4000 }
+const BREAKOUT_KEY = 'tickpulse.breakout'
+function loadBreakout(): BreakoutConfig {
+  try {
+    const raw = localStorage.getItem(BREAKOUT_KEY)
+    if (raw) return { ...BREAKOUT_DEFAULTS, ...JSON.parse(raw) }
+  } catch {
+    /* ignore */
+  }
+  return { ...BREAKOUT_DEFAULTS }
+}
+let breakout: BreakoutConfig = loadBreakout()
+export function getBreakoutConfig(): BreakoutConfig {
+  return { ...breakout }
+}
+export function setBreakoutConfig(patch: Partial<BreakoutConfig>): void {
+  breakout = { ...breakout, ...patch }
+  try {
+    localStorage.setItem(BREAKOUT_KEY, JSON.stringify(breakout))
+  } catch {
+    /* ignore */
+  }
+}
 
 export interface Alert {
   id: number
@@ -70,9 +111,10 @@ export function getAndResetIngestCount(): number {
   return c
 }
 
-function pushHist(i: number, v: number) {
+function pushHist(i: number, vol: number, price: number) {
   const h = histHead[i]
-  histVol[i * HIST + h] = v
+  histVol[i * HIST + h] = vol
+  histPrice[i * HIST + h] = price
   histHead[i] = (h + 1) % HIST
 }
 
@@ -92,6 +134,8 @@ export function ingest(ticks: KiteTick[]): void {
     if (tk.last_traded_quantity !== undefined) ltq[i] = tk.last_traded_quantity
     if (tk.total_buy_quantity !== undefined) buyQty[i] = tk.total_buy_quantity
     if (tk.total_sell_quantity !== undefined) sellQty[i] = tk.total_sell_quantity
+    if (tk.ohlc && tk.ohlc.close > 0) prevClose[i] = tk.ohlc.close
+    if (tk.average_traded_price !== undefined && tk.average_traded_price > 0) vwap[i] = tk.average_traded_price
 
     const newVol = tk.volume_traded ?? cumVol[i]
 
@@ -102,7 +146,7 @@ export function ingest(ticks: KiteTick[]): void {
       const seed = tk.last_traded_quantity ?? 0
       volEwma[i] = seed
       volVar[i] = seed * seed * 0.01
-      pushHist(i, seed)
+      pushHist(i, seed, price)
       continue
     }
 
@@ -119,11 +163,18 @@ export function ingest(ticks: KiteTick[]): void {
     const z = diff / sd
     zScore[i] = z
     rvol[i] = delta / (volEwma[i] || 1)
-    pushHist(i, delta)
+    pushHist(i, delta, price)
 
-    // Tiered alert with per-symbol cooldown (no spam).
-    const tier = z > 5 ? 3 : z > 3.5 ? 2 : z > 2.5 ? 1 : 0
-    if (tier > 0 && now - lastAlertAt[i] > 4000) {
+    // Order flow (tick rule): attribute this interval's volume to buyers or
+    // sellers by price direction, EWMA-smoothed → "is the surge buying/selling".
+    const buyDelta = dir[i] > 0 ? delta : 0
+    const sellDelta = dir[i] < 0 ? delta : 0
+    buyFlow[i] += FLOW_ALPHA * (buyDelta - buyFlow[i])
+    sellFlow[i] += FLOW_ALPHA * (sellDelta - sellFlow[i])
+
+    // Tiered alert using the user's breakout thresholds, with per-symbol cooldown.
+    const tier = z >= breakout.crit ? 3 : z >= breakout.warn ? 2 : z >= breakout.info ? 1 : 0
+    if (tier > 0 && now - lastAlertAt[i] > breakout.cooldownMs) {
       lastAlertAt[i] = now
       alertUntil[i] = now + 1600 // row glow duration
       alertTier[i] = tier

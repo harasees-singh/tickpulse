@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="208" height="48" viewBox="0 0 208 48" role="img" aria-label="TickPulse">
+  <defs>
+    <linearGradient id="tp-bg-lockup" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0a6cc4"/>
+      <stop offset="1" stop-color="#004a8c"/>
+    </linearGradient>
+  </defs>
+  <!-- mark (the 64px icon scaled to 40px) -->
+  <g transform="translate(4 4) scale(0.625)">
+    <rect width="64" height="64" rx="15" fill="url(#tp-bg-lockup)"/>
+    <g fill="#ffffff">
+      <rect x="12" y="36" width="6" height="16" rx="2" opacity="0.22"/>
+      <rect x="21" y="30" width="6" height="22" rx="2" opacity="0.22"/>
+      <rect x="30" y="38" width="6" height="14" rx="2" opacity="0.22"/>
+      <rect x="39" y="24" width="6" height="28" rx="2" opacity="0.42"/>
+      <rect x="48" y="33" width="6" height="19" rx="2" opacity="0.22"/>
+    </g>
+    <path d="M8 40 H19 L24 40 L29 35 L33 40 L39 17 L44 45 L49 40 H56"
+          fill="none" stroke="#ffffff" stroke-width="3"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="39" cy="17" r="3.2" fill="#84fd7b"/>
+  </g>
+  <!-- wordmark -->
+  <text x="56" y="31" font-family="Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+        font-size="23" font-weight="700" letter-spacing="-0.6">
+    <tspan fill="#1b1c1c">Tick</tspan><tspan fill="#005cab">Pulse</tspan>
+  </text>
+</svg>
+

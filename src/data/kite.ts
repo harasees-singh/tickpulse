@@ -51,3 +51,10 @@ export interface TickerClient {
   on(ev: 'disconnect', cb: () => void): void
 }
 
+/** TickerClient + the telemetry the UI reads. Both MockTicker and the live
+ *  KiteTickerAdapter implement this, so they're drop-in interchangeable. */
+export interface Ticker extends TickerClient {
+  ping(): void
+  getLatency(): number
+}
+

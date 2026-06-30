@@ -8,4 +8,9 @@ yarn-error.log*
 /.pnp
 .pnp.js
 
+# local secrets (Kite api_key/api_secret)
+.env
+.env.local
+.env.*.local
+
 .vscode/*

@@ -1,9 +1,12 @@
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
 import SymbolTable from './SymbolTable'
 import { MockTicker } from '../data/mockTicker'
+import { KiteTickerAdapter } from '../data/kiteTicker'
+import type { Ticker } from '../data/kite'
 import {
   ingest, computeOrder, drainAlerts, getAndResetIngestCount,
-  N, chgPct, buyQty, sellQty, type Alert, type SortKey
+  getBreakoutConfig, setBreakoutConfig,
+  N, symbols, chgPct, buyQty, sellQty, type Alert, type SortKey
 } from '../store'
 import { startPump } from '../render'
 import { fmtTime, fmtVol } from '../format'
@@ -31,15 +34,53 @@ export default function App() {
   const [online, setOnline] = createSignal(navigator.onLine)
   const [netType, setNetType] = createSignal('')
   const [netRtt, setNetRtt] = createSignal<number | null>(null)
+  const [live, setLive] = createSignal(false)
+  const [userName, setUserName] = createSignal<string | null>(null)
+  const [feedIdle, setFeedIdle] = createSignal(false)
+  const [view, setView] = createSignal<'board' | 'settings'>('board')
+  const bk = getBreakoutConfig()
+  const [thInfo, setThInfo] = createSignal(bk.info)
+  const [thWarn, setThWarn] = createSignal(bk.warn)
+  const [thCrit, setThCrit] = createSignal(bk.crit)
+  const [thCool, setThCool] = createSignal(bk.cooldownMs)
 
-  let ticker: MockTicker
+  let ticker: Ticker | undefined
+  let mockTicker: MockTicker | null = null
   let log: Alert[] = []
+  let idleSecs = 0
   const act60: number[] = []
 
-  onMount(() => {
-    ticker = new MockTicker()
+  // Choose the data source from the Zerodha session: real feed if logged in,
+  // otherwise the simulated mock. Both implement the same Ticker interface.
+  function startTicker(sess: any) {
+    if (sess?.connected && sess.access_token) {
+      ticker = new KiteTickerAdapter({
+        apiKey: sess.api_key,
+        accessToken: sess.access_token,
+        tokens: symbols.map((s) => s.token)
+      })
+      setLive(true)
+      setUserName(sess.user_name ?? sess.user_id ?? null)
+    } else {
+      mockTicker = new MockTicker()
+      ticker = mockTicker
+      setLive(false)
+    }
     ticker.on('ticks', ingest)
     ticker.connect()
+  }
+
+  onMount(() => {
+    // Pick the data source from the Zerodha session (live vs simulated).
+    fetch('/auth/session', { credentials: 'same-origin' })
+      .then((r) => r.json())
+      .then(startTicker)
+      .catch(() => startTicker(null))
+
+    // tidy the ?auth=… param the OAuth redirect leaves behind
+    if (location.search.includes('auth=')) {
+      history.replaceState({}, '', location.pathname)
+    }
 
     // User's real network health: online state + Network Information API.
     const conn = (navigator as any).connection
@@ -57,8 +98,15 @@ export default function App() {
     const statsTimer = setInterval(() => {
       const t = getAndResetIngestCount()
       setTps(t)
-      ticker.ping()
-      setWsLat(ticker.getLatency())
+      ticker?.ping()
+      setWsLat(ticker?.getLatency() ?? 0)
+      // Detect a live feed that's gone quiet (market closed / after-hours snapshot).
+      if (t > 0) {
+        idleSecs = 0
+        if (feedIdle()) setFeedIdle(false)
+      } else if (live()) {
+        if (++idleSecs >= 8 && !feedIdle()) setFeedIdle(true)
+      }
       act60.push(t)
       if (act60.length > 60) act60.shift()
       setActivity(act60.reduce((a, b) => a + b, 0))
@@ -100,7 +148,7 @@ export default function App() {
       window.removeEventListener('online', updateNet)
       window.removeEventListener('offline', updateNet)
       conn?.removeEventListener?.('change', updateNet)
-      ticker.disconnect()
+      ticker?.disconnect()
     })
   })
 
@@ -108,17 +156,37 @@ export default function App() {
 
   function onRps(v: number) {
     setRps(v)
-    ticker.setRpsScale(v)
+    mockTicker?.setRpsScale(v)
   }
   function toggleChaos() {
     const next = !chaos()
     setChaos(next)
-    ticker.setBurstProb(next ? 0.01 : 0.0006)
+    mockTicker?.setBurstProb(next ? 0.01 : 0.0006)
   }
   function togglePause() {
     const next = !paused()
     setPaused(next)
-    next ? ticker.pause() : ticker.resume()
+    next ? mockTicker?.pause() : mockTicker?.resume()
+  }
+
+  // Breakout threshold controls (Settings tab) — persisted via the store.
+  function onTh(which: 'info' | 'warn' | 'crit', v: number) {
+    if (which === 'info') setThInfo(v)
+    else if (which === 'warn') setThWarn(v)
+    else setThCrit(v)
+    setBreakoutConfig({ [which]: v } as any)
+  }
+  function onCooldown(secs: number) {
+    setThCool(secs * 1000)
+    setBreakoutConfig({ cooldownMs: secs * 1000 })
+  }
+  function resetBreakout() {
+    const d = { info: 2.5, warn: 3.5, crit: 5, cooldownMs: 4000 }
+    setBreakoutConfig(d)
+    setThInfo(d.info)
+    setThWarn(d.warn)
+    setThCrit(d.crit)
+    setThCool(d.cooldownMs)
   }
 
   const total = () => adv() + dec()
@@ -150,18 +218,23 @@ export default function App() {
       {/* ---------------- sidebar ---------------- */}
       <aside class="sidebar">
         <div class="brand-block">
-          <h1>TickPulse</h1>
-          <p>Terminal v2.4</p>
+          <div class="brand-row">
+            <img class="brand-mark" src="/tickpulse-icon.svg" width="30" height="30" alt="" />
+            <div>
+              <h1>TickPulse</h1>
+              <p>Terminal v2.4</p>
+            </div>
+          </div>
         </div>
         <nav class="nav">
           <div class="nav-item"><Icon n="dashboard" /> Dashboard</div>
           <div class="nav-item"><Icon n="list_alt" /> Marketwatch</div>
-          <div class="nav-item active"><Icon n="leaderboard" /> Leaderboard</div>
+          <div class="nav-item" classList={{ active: view() === 'board' }} onClick={() => setView('board')}><Icon n="leaderboard" /> Leaderboard</div>
           <div class="nav-item"><Icon n="analytics" /> Analytics</div>
-          <div class="nav-item"><Icon n="settings" /> Settings</div>
+          <div class="nav-item" classList={{ active: view() === 'settings' }} onClick={() => setView('settings')}><Icon n="settings" /> Settings</div>
         </nav>
         <div class="sidebar-foot">
-          <button class="btn-primary"><Icon n="bolt" /> Live Terminal</button>
+          <button class="btn-primary" onClick={() => (window.location.href = '/auth/login')} title="Sign in with your Zerodha account"><Icon n="bolt" /> Live Terminal</button>
           <div class="conn" title="Browser online state (navigator.onLine) + Network Information API estimate (Chromium only). Not a server reachability probe."><Icon n="wifi" /> Connection: <b class={connCls()}>{connLabel()}</b><span class="net-detail">{netDetail()}</span></div>
           <div class="conn"><Icon n="help" /> Help</div>
         </div>
@@ -196,10 +269,60 @@ export default function App() {
 
         {/* content */}
         <div class="content">
+          <Show when={view() === 'settings'}>
+            <div class="settings">
+              <div class="content-head">
+                <div>
+                  <h2 class="content-title">Breakout Settings</h2>
+                  <p class="content-sub">Define what counts as a volume breakout. These thresholds drive the alerts, row glows and the Recent Breakouts log — saved in this browser.</p>
+                </div>
+              </div>
+              <div class="settings-card">
+                <div class="setting-row">
+                  <div class="setting-label"><span><span class="dot info" /> Watch (mild flag)</span><small>Slightly unusual volume.</small></div>
+                  <div class="setting-control">
+                    <input type="range" min="1" max="8" step="0.1" value={thInfo()} onInput={(e) => onTh('info', parseFloat(e.currentTarget.value))} />
+                    <span class="setting-val">{thInfo().toFixed(1)}σ</span>
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-label"><span><span class="dot warn" /> High</span><small>Notable surge in volume.</small></div>
+                  <div class="setting-control">
+                    <input type="range" min="1" max="10" step="0.1" value={thWarn()} onInput={(e) => onTh('warn', parseFloat(e.currentTarget.value))} />
+                    <span class="setting-val">{thWarn().toFixed(1)}σ</span>
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-label"><span><span class="dot crit" /> Spike (breakout)</span><small>Critical alert + toast.</small></div>
+                  <div class="setting-control">
+                    <input type="range" min="1" max="12" step="0.1" value={thCrit()} onInput={(e) => onTh('crit', parseFloat(e.currentTarget.value))} />
+                    <span class="setting-val">{thCrit().toFixed(1)}σ</span>
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-label"><span>Alert cooldown</span><small>Minimum gap between alerts per symbol.</small></div>
+                  <div class="setting-control">
+                    <input type="range" min="0" max="30" step="1" value={thCool() / 1000} onInput={(e) => onCooldown(parseFloat(e.currentTarget.value))} />
+                    <span class="setting-val">{(thCool() / 1000).toFixed(0)}s</span>
+                  </div>
+                </div>
+                <div class="setting-actions">
+                  <span class="setting-note">A <b>breakout</b> fires when a symbol's latest per-tick volume is ≥ <b>{thCrit().toFixed(1)}σ</b> above its recent average (z-score). Watch / High are softer tiers.</span>
+                  <button class="ghost-btn" onClick={resetBreakout}><Icon n="restart_alt" /> Reset defaults</button>
+                </div>
+              </div>
+            </div>
+          </Show>
+
+          <Show when={view() === 'board'}>
           <div class="content-head">
             <div>
               <h2 class="content-title">Volume Leaderboard</h2>
-              <p class="content-sub">Real-time unusual volume spikes detected across NSE equity.</p>
+              <p class="content-sub">{live()
+                ? (feedIdle()
+                  ? 'Live feed idle — last snapshot (market likely closed). Chg% is vs previous close.'
+                  : 'Live NSE feed via Zerodha Kite — Chg% is vs previous close.')
+                : 'Simulated demo feed — click “Live Terminal” to stream your real Zerodha data.'}</p>
             </div>
             <div class="content-actions">
               <label class="ctl">
@@ -212,20 +335,28 @@ export default function App() {
                   <option value="symbol">Symbol</option>
                 </select>
               </label>
-              <label class="ctl">
-                Load {rps().toFixed(1)}×
-                <input type="range" min="0.5" max="6" step="0.5" value={rps()}
-                  onInput={(e) => onRps(parseFloat(e.currentTarget.value))} />
-              </label>
-              <button class="ghost-btn" classList={{ on: chaos() }} onClick={toggleChaos} title="More spontaneous spikes">
-                <Icon n="bolt" /> Chaos
-              </button>
-              <button class="ghost-btn" onClick={() => ticker.triggerBurst()} title="Force a spike on a random symbol">
-                <Icon n="add_alert" /> Trigger spike
-              </button>
-              <button class="ghost-btn" classList={{ on: paused() }} onClick={togglePause}>
-                <Icon n={paused() ? 'play_arrow' : 'pause'} /> {paused() ? 'Resume' : 'Pause'}
-              </button>
+              <Show when={!live()}>
+                <label class="ctl">
+                  Load {rps().toFixed(1)}×
+                  <input type="range" min="0.5" max="6" step="0.5" value={rps()}
+                    onInput={(e) => onRps(parseFloat(e.currentTarget.value))} />
+                </label>
+                <button class="ghost-btn" classList={{ on: chaos() }} onClick={toggleChaos} title="More spontaneous spikes">
+                  <Icon n="bolt" /> Chaos
+                </button>
+                <button class="ghost-btn" onClick={() => mockTicker?.triggerBurst()} title="Force a spike on a random symbol">
+                  <Icon n="add_alert" /> Trigger spike
+                </button>
+                <button class="ghost-btn" classList={{ on: paused() }} onClick={togglePause}>
+                  <Icon n={paused() ? 'play_arrow' : 'pause'} /> {paused() ? 'Resume' : 'Pause'}
+                </button>
+              </Show>
+              <Show when={live()}>
+                <span class="live-badge"><span class="live-dot" classList={{ idle: feedIdle() }} /> {feedIdle() ? 'IDLE' : 'LIVE'} · {userName()}</span>
+                <button class="ghost-btn" onClick={() => (window.location.href = '/auth/logout')} title="Disconnect Zerodha">
+                  <Icon n="logout" /> Logout
+                </button>
+              </Show>
             </div>
           </div>
 
@@ -235,8 +366,8 @@ export default function App() {
           <div class="bento">
             <div class="card breadth">
               <div class="card-head">
-                <h3>Market Breadth</h3>
-                <span class="chip">NSE Equity</span>
+                <h3>Watchlist Breadth</h3>
+                <span class="chip">{N} symbols</span>
               </div>
               <div class="ad-labels">
                 <span class="a">ADVANCE ({adv()})</span>
@@ -310,6 +441,7 @@ export default function App() {
               </div>
             </div>
           </div>
+          </Show>
         </div>
 
         {/* WS status pill — real-time WebSocket telemetry */}
