@@ -13,6 +13,8 @@ export interface ChartPalette {
   downFill: string
   vwap: string
   prevClose: string
+  grid: string
+  tagOn: string
   flashPeak: string
   flashRest: string
 }
@@ -26,6 +28,8 @@ export const palette: ChartPalette = {
   downFill: 'rgba(255,84,81,0.14)',
   vwap: 'rgba(174,198,255,0.6)',
   prevClose: 'rgba(140,144,159,0.5)',
+  grid: 'rgba(140,144,159,0.18)',
+  tagOn: '#0b0e12',
   flashPeak: 'rgba(78,142,255,0.28)',
   flashRest: 'rgba(78,142,255,0)'
 }
@@ -50,6 +54,8 @@ export function refreshPalette(): void {
   palette.downFill = v('--chart-down-fill', palette.downFill)
   palette.vwap = v('--chart-vwap', palette.vwap)
   palette.prevClose = v('--chart-prevclose', palette.prevClose)
+  palette.grid = v('--chart-grid', palette.grid)
+  palette.tagOn = v('--chart-tag-on', palette.tagOn)
   palette.flashPeak = v('--flash', palette.flashPeak)
   palette.flashRest = toTransparent(palette.flashPeak)
 }

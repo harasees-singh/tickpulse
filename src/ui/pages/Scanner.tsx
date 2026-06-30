@@ -1,9 +1,10 @@
 import { For, Show } from 'solid-js'
+import { useNavigate } from '@solidjs/router'
 import SymbolTable from '../SymbolTable'
 import { Icon } from '../Icon'
 import { InfoTip } from '../InfoTip'
 import { useTerminal } from '../terminal'
-import { N, DEFAULT_SCAN_FILTERS, type ScanFilters } from '../../core/store'
+import { DEFAULT_SCAN_FILTERS, type ScanFilters } from '../../core/store'
 import { fmtTime, fmtVol } from '../../core/format'
 
 // Scanner — the core board (DEV_PLAN §2.1): volume leaderboard + bento widgets.
@@ -11,6 +12,7 @@ import { fmtTime, fmtVol } from '../../core/format'
 // values are computed locally to keep the shared context lean.
 export default function Scanner() {
   const t = useTerminal()
+  const navigate = useNavigate()
 
   const total = () => t.adv() + t.dec()
   const advPct = () => (total() ? (t.adv() / total()) * 100 : 50)
@@ -20,7 +22,7 @@ export default function Scanner() {
   const sellPct = () => 100 - buyPct()
   const sentiment = () => (buyPct() >= 55 ? 'BULLISH' : buyPct() <= 45 ? 'BEARISH' : 'NEUTRAL')
   const sentimentCls = () => (buyPct() >= 55 ? 'up' : buyPct() <= 45 ? 'down' : 'flat')
-  const abovePct = () => (N ? (t.aboveVwap() / N) * 100 : 0)
+  const abovePct = () => (t.tracked() ? (t.aboveVwap() / t.tracked()) * 100 : 0)
 
   // Filter chips → the Shell-owned ScanFilters (drives computeOrder).
   const f = () => t.filters()
@@ -64,28 +66,32 @@ export default function Scanner() {
 
       <div class="scan-filters">
         <span class="scan-filters-label"><Icon n="filter_alt" /> Filters</span>
-        <label class="scan-chip">Min RVOL
+        <label class="scan-chip scan-chip-text" title="Filter the visible rows by symbol name (substring match).">Symbol
+          <input type="text" placeholder="e.g. HDFC" value={f().text}
+            onInput={(e) => setF({ text: e.currentTarget.value })} />
+        </label>
+        <label class="scan-chip" title="Relative Volume — today's volume vs its recent average. 2× means twice the usual activity (a volume surge).">Min RVOL
           <input type="number" min="0" step="0.5" placeholder="0" value={f().minRvol || ''}
             onInput={(e) => setF({ minRvol: parseFloat(e.currentTarget.value) || 0 })} />
           <span>×</span>
         </label>
-        <label class="scan-chip">Min Turnover
+        <label class="scan-chip" title="Minimum value traded so far today (₹ crore) = VWAP × volume. Filters out illiquid names.">Min Turnover
           <input type="number" min="0" step="1" placeholder="0" value={f().minTurnover ? f().minTurnover / 1e7 : ''}
             onInput={(e) => setF({ minTurnover: (parseFloat(e.currentTarget.value) || 0) * 1e7 })} />
           <span>Cr</span>
         </label>
-        <label class="scan-chip">Price ₹
+        <label class="scan-chip" title="Only show symbols whose last price is within this ₹ range.">Price ₹
           <input type="number" min="0" placeholder="min" value={f().priceMin || ''}
             onInput={(e) => setF({ priceMin: parseFloat(e.currentTarget.value) || 0 })} />
           <span>–</span>
           <input type="number" min="0" placeholder="max" value={f().priceMax || ''}
             onInput={(e) => setF({ priceMax: parseFloat(e.currentTarget.value) || 0 })} />
         </label>
-        <button class="ghost-btn" classList={{ on: f().aboveVwap }} onClick={() => setF({ aboveVwap: !f().aboveVwap })} title="Only symbols trading above their VWAP">
+        <button class="ghost-btn" classList={{ on: f().aboveVwap }} onClick={() => setF({ aboveVwap: !f().aboveVwap })} title="Show only symbols trading ABOVE their day VWAP (volume-weighted average price) — buyers in control, usually bullish intraday.">
           <Icon n="trending_up" /> Above VWAP
         </button>
-        <button class="ghost-btn" classList={{ on: f().buyFlowOnly }} onClick={() => setF({ buyFlowOnly: !f().buyFlowOnly })} title="Only net buyer-initiated flow">
-          <Icon n="shopping_cart" /> Buy Flow
+        <button class="ghost-btn" classList={{ on: f().buyFlowOnly }} onClick={() => setF({ buyFlowOnly: !f().buyFlowOnly })} title="Show only symbols with more buyer-initiated than seller-initiated volume — i.e. net buying pressure (from the tick-rule order flow).">
+          <Icon n="north_east" /> Net Buying
         </button>
         <Show when={filtersActive()}>
           <button class="ghost-btn" onClick={() => t.setFilters({ ...DEFAULT_SCAN_FILTERS, text: f().text })} title="Clear all filters">
@@ -94,14 +100,14 @@ export default function Scanner() {
         </Show>
       </div>
 
-      <SymbolTable order={t.order()} sort={t.sort()} sortDir={t.sortDir()} onSort={t.cycleSort} />
+      <SymbolTable order={t.order()} sort={t.sort()} sortDir={t.sortDir()} onSort={t.cycleSort} onOpen={(m) => navigate('/analytics/' + m.name)} />
 
       {/* bento widgets */}
       <div class="bento">
         <div class="card breadth">
           <div class="card-head">
             <h3>Watchlist Breadth <InfoTip id="widget.breadth" /></h3>
-            <span class="chip">{N} symbols</span>
+            <span class="chip">{t.tracked()} symbols</span>
           </div>
           <div class="ad-labels">
             <span class="a">ADVANCE ({t.adv()})</span>
@@ -151,11 +157,11 @@ export default function Scanner() {
         <div class="card vwap">
           <div class="card-head">
             <h3>VWAP Positioning <InfoTip id="widget.vwap" /></h3>
-            <span class="chip">{N} symbols</span>
+            <span class="chip">{t.tracked()} symbols</span>
           </div>
           <div class="ad-labels">
             <span class="a">ABOVE ({t.aboveVwap()})</span>
-            <span class="d">BELOW ({N - t.aboveVwap()})</span>
+            <span class="d">BELOW ({t.tracked() - t.aboveVwap()})</span>
           </div>
           <div class="ad-row">
             <div class="ad-bar">

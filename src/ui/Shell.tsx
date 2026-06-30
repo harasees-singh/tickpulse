@@ -5,7 +5,7 @@ import { KiteTickerAdapter } from '../data/kiteTicker'
 import type { Ticker } from '../data/kite'
 import {
   ingest, computeOrder, drainAlerts, getAndResetIngestCount,
-  getBreakoutConfig, setBreakoutConfig, applyWatchlist, DEFAULT_SCAN_FILTERS, naturalDir,
+  getBreakoutConfig, setBreakoutConfig, applyWatchlist, ensureSlot, DEFAULT_SCAN_FILTERS, naturalDir,
   N, chgPct, buyQty, sellQty, ltp, vwap, type Alert, type SortKey, type SortDir, type ScanFilters
 } from '../core/store'
 import { startPump } from '../core/render'
@@ -13,6 +13,7 @@ import { updateSettings, getSettings, subscribeSettings, type Theme } from '../c
 import { session, useMock } from '../core/session'
 import { helpText } from '../core/help'
 import { Icon } from './Icon'
+import { CommandPalette, openPalette, SHORTCUT_KEYS, SHORTCUT_LABEL } from './CommandPalette'
 import { TerminalContext, type TerminalCtx } from './terminal'
 
 // Shell — the persistent app layout (DEV_PLAN §1.B). As the Router `root` it
@@ -35,6 +36,7 @@ export default function Shell(props: RouteSectionProps) {
   const [adv, setAdv] = createSignal(0)
   const [dec, setDec] = createSignal(0)
   const [aboveVwap, setAboveVwap] = createSignal(0)
+  const [tracked, setTracked] = createSignal(N) // count of symbols after filters
   const [buy, setBuy] = createSignal(0)
   const [sell, setSell] = createSignal(0)
   const [wsLat, setWsLat] = createSignal(0)
@@ -96,6 +98,27 @@ export default function Shell(props: RouteSectionProps) {
 
   onMount(() => {
     startTicker()
+
+    // Re-register persisted watchlist instruments so their names resolve after a
+    // reload, and (live only) subscribe/unsubscribe as the active watchlist edits.
+    const wlMeta = getSettings().watchlistMeta
+    for (const k of Object.keys(wlMeta)) {
+      const m = wlMeta[Number(k)]
+      ensureSlot({ token: Number(k), name: m.name, exch: m.exch })
+    }
+    let subscribed = new Set<number>()
+    const syncSubscriptions = () => {
+      if (!live() || !ticker) return
+      const st = getSettings()
+      const tokens = st.watchlists.find((w) => w.id === st.activeWatchlist)?.tokens ?? []
+      const next = new Set(tokens)
+      const toAdd = tokens.filter((x) => !subscribed.has(x))
+      const toRemove = [...subscribed].filter((x) => !next.has(x))
+      if (toAdd.length) ticker.subscribe(toAdd)
+      if (toRemove.length) ticker.unsubscribe(toRemove)
+      subscribed = next
+    }
+    const unsubWatchlist = subscribeSettings(syncSubscriptions)
     // User's real network health: online state + Network Information API.
     const conn = (navigator as any).connection
     const updateNet = () => {
@@ -122,12 +145,15 @@ export default function Shell(props: RouteSectionProps) {
         if (++idleSecs >= 8 && !feedIdle()) setFeedIdle(true)
       }
 
+      // Breadth / pressure / VWAP stats reflect the CURRENTLY FILTERED set only.
+      const ord = order()
       let a = 0
       let d = 0
       let sb = 0
       let ss = 0
       let av = 0
-      for (let i = 0; i < N; i++) {
+      for (let k = 0; k < ord.length; k++) {
+        const i = ord[k]
         if (chgPct[i] > 0.01) a++
         else if (chgPct[i] < -0.01) d++
         sb += buyQty[i]
@@ -139,6 +165,7 @@ export default function Shell(props: RouteSectionProps) {
       setBuy(sb)
       setSell(ss)
       setAboveVwap(av)
+      setTracked(ord.length)
     }, 1000)
 
     let fpsTick = 0
@@ -162,6 +189,7 @@ export default function Shell(props: RouteSectionProps) {
       window.removeEventListener('online', updateNet)
       window.removeEventListener('offline', updateNet)
       conn?.removeEventListener?.('change', updateNet)
+      unsubWatchlist()
       ticker?.disconnect()
     })
   })
@@ -239,7 +267,7 @@ export default function Shell(props: RouteSectionProps) {
   const ctx: TerminalCtx = {
     sort, setSort, filters, setFilters, order, alerts, live, userName, feedIdle,
     sortDir, cycleSort,
-    adv, dec, aboveVwap, buy, sell,
+    adv, dec, aboveVwap, buy, sell, tracked,
     rps, chaos, paused, onRps, toggleChaos, togglePause, triggerBurst,
     thInfo, thWarn, thCrit, thCool, onTh, onCooldown, resetBreakout
   }
@@ -277,19 +305,18 @@ export default function Shell(props: RouteSectionProps) {
       <main class="main">
         <header class="topnav">
           <div class="topnav-left">
-            <div class="search-box">
-              <Icon n="search" />
-              <input
-                type="text"
-                placeholder="Search instruments…"
-                value={filters().text}
-                onInput={(e) => setFilters({ ...filters(), text: e.currentTarget.value })}
-              />
-            </div>
             <nav class="tabs">
               <span class="tab active" title="National Stock Exchange — the segment currently tracked">NSE</span>
             </nav>
           </div>
+          <button class="topnav-search" onClick={() => openPalette()} title={'Search symbols (' + SHORTCUT_LABEL + ')'}>
+            <Icon n="search" />
+            <span class="topnav-search-text">Search symbols…</span>
+            <span class="kbd-row">
+              <kbd class="kbd-cap">{SHORTCUT_KEYS[0]}</kbd>
+              <kbd class="kbd-cap">{SHORTCUT_KEYS[1]}</kbd>
+            </span>
+          </button>
           <div class="topnav-right">
             <A href="/alerts" class="icon-btn icon-wrap" activeClass="active" title="Alerts">
               <Icon n="notifications" />
@@ -327,6 +354,9 @@ export default function Shell(props: RouteSectionProps) {
             <span class="v" classList={{ [fpsCls()]: !!fpsCls() }}>{Math.round(fps())} fps</span>
           </div>
         </div>
+
+        {/* ⌘K / Ctrl+K command palette */}
+        <CommandPalette />
 
         {/* critical toasts */}
         <div class="toasts">

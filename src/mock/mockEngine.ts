@@ -40,13 +40,16 @@ function hash01(n: number): number {
   return (x % 100000) / 100000
 }
 
-function makeDepth(price: number, tick: number, median: number): { buy: KiteDepthItem[]; sell: KiteDepthItem[] } {
+function makeDepth(price: number, tick: number, median: number, lean: number): { buy: KiteDepthItem[]; sell: KiteDepthItem[] } {
   const buy: KiteDepthItem[] = []
   const sell: KiteDepthItem[] = []
   for (let l = 1; l <= 5; l++) {
-    const q = Math.max(1, Math.round(median * (0.5 + Math.random())))
-    buy.push({ price: round2(price - l * tick), quantity: q, orders: 1 + (q % 7) })
-    sell.push({ price: round2(price + l * tick), quantity: q, orders: 1 + (q % 5) })
+    // Independent bid/ask sizes that lean with order-book pressure, so the Depth
+    // bar reflects real imbalance and actually moves (not pinned at 50/50).
+    const bq = Math.max(1, Math.round(median * (0.5 + Math.random()) * (1 + 0.6 * lean)))
+    const sq = Math.max(1, Math.round(median * (0.5 + Math.random()) * (1 - 0.6 * lean)))
+    buy.push({ price: round2(price - l * tick), quantity: bq, orders: 1 + (bq % 7) })
+    sell.push({ price: round2(price + l * tick), quantity: sq, orders: 1 + (sq % 5) })
   }
   return { buy, sell }
 }
@@ -164,7 +167,7 @@ export class MockEngine {
           oi: 0,
           oi_day_high: 0,
           oi_day_low: 0,
-          depth: makeDepth(p, s.tickSize, median)
+          depth: makeDepth(p, s.tickSize, median, lean)
         })
 
         // schedule next arrival (exponential inter-arrival ~ Poisson process)

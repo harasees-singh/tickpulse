@@ -26,6 +26,7 @@ export interface SymMeta {
 // Grow as slots are allocated; symbols[idx] is the metadata for slot idx.
 export const symbols: SymMeta[] = []
 export const tokenToIdx = new Map<number, number>()
+export const nameToIdx = new Map<string, number>() // tradingsymbol → slot (for /analytics/:symbol)
 
 // --- hot fields (index = stable per-symbol slot, capacity MAX_N) ---
 export const ltp = new Float64Array(MAX_N)
@@ -89,6 +90,7 @@ export function ensureSlot(s: SlotSpec): number {
   const i = N
   symbols.push({ idx: i, token: s.token, name: s.name, exch: s.exch })
   tokenToIdx.set(s.token, i)
+  nameToIdx.set(s.name, i)
   const base = s.base ?? 0
   ltp[i] = base
   prevClose[i] = base
@@ -98,6 +100,11 @@ export function ensureSlot(s: SlotSpec): number {
   low[i] = base
   N++
   return i
+}
+
+/** Resolve a tradingsymbol to its slot index, if tracked. */
+export function resolveByName(name: string): number | undefined {
+  return nameToIdx.get(name)
 }
 
 /** Seed the local demo universe (default + mock-mode source). Idempotent. */

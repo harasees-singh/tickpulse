@@ -14,7 +14,7 @@ const [depthPop, setDepthPop] = createSignal<DepthPop | null>(null)
 
 // Lightweight custom virtualization: only ~viewport rows exist in the DOM, each
 // absolutely positioned. Keyed by stable SymMeta refs so scrolling reuses nodes.
-export default function SymbolTable(props: { order: number[]; sort: SortKey; sortDir: SortDir; onSort: (k: SortKey) => void }) {
+export default function SymbolTable(props: { order: number[]; sort: SortKey; sortDir: SortDir; onSort: (k: SortKey) => void; onOpen?: (meta: SymMeta) => void }) {
   let scroller!: HTMLDivElement
   const [scrollTop, setScrollTop] = createSignal(0)
   const [viewH, setViewH] = createSignal(560)
@@ -50,7 +50,7 @@ export default function SymbolTable(props: { order: number[]; sort: SortKey; sor
       onClick={key ? () => props.onSort(key) : undefined}
     >
       {label}
-      {key !== null && props.sort === key && <span class="sort-caret">{props.sortDir === 'asc' ? '▲' : '▼'}</span>}
+      {key !== null && <span class="sort-caret">{props.sort === key ? (props.sortDir === 'asc' ? '▲' : '▼') : ''}</span>}
     </div>
   )
 
@@ -71,7 +71,7 @@ export default function SymbolTable(props: { order: number[]; sort: SortKey; sor
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}>
         <div class="spacer" style={{ height: total() * ROW_H + 'px' }}>
           <For each={visMetas()}>
-            {(meta, i) => <SymbolRow meta={meta} top={() => (start() + i()) * ROW_H} />}
+            {(meta, i) => <SymbolRow meta={meta} top={() => (start() + i()) * ROW_H} onOpen={props.onOpen} />}
           </For>
         </div>
       </div>
@@ -80,11 +80,13 @@ export default function SymbolTable(props: { order: number[]; sort: SortKey; sor
   )
 }
 
-function SymbolRow(props: { meta: SymMeta; top: () => number }) {
+function SymbolRow(props: { meta: SymMeta; top: () => number; onOpen?: (meta: SymMeta) => void }) {
   let root!: HTMLDivElement
   let ltpEl!: HTMLDivElement
   let chgEl!: HTMLSpanElement
   let surgeEl!: HTMLSpanElement
+  let surgeNum!: HTMLSpanElement
+  let surgeArrow!: HTMLSpanElement
   let surgeBuy!: HTMLSpanElement
   let surgeSell!: HTMLSpanElement
   let turnoverEl!: HTMLDivElement
@@ -108,11 +110,11 @@ function SymbolRow(props: { meta: SymMeta; top: () => number }) {
     const c = chgPct[i]
     chgEl.textContent = (c > 0 ? '+' : '') + c.toFixed(2) + '%'
     chgEl.className = 'chg-pill ' + (c > 0.01 ? 'up' : c < -0.01 ? 'down' : 'flat')
-    surgeEl.textContent = rvol[i].toFixed(2) + 'x'
+    surgeNum.textContent = rvol[i].toFixed(2) + 'x'
     turnoverEl.textContent = fmtTurnover(vwap[i] * cumVol[i])
 
     const refs: RowRefs = {
-      idx: i, root, ltpEl, chgEl, surgeEl, surgeBuy, surgeSell, turnoverEl,
+      idx: i, root, ltpEl, chgEl, surgeEl, surgeNum, surgeArrow, surgeBuy, surgeSell, turnoverEl,
       ltpDot, vwapTick, openTick, depthBuy, freshDot, freshEl,
       priceCtx, priceW: 80, priceH: SPARK_H,
       lastLtp: NaN, lastTurnover: NaN, lastTier: -1, lastFresh: '', lastAgeText: ''
@@ -138,7 +140,7 @@ function SymbolRow(props: { meta: SymMeta; top: () => number }) {
   })
 
   return (
-    <div class="trow" ref={root} style={{ transform: `translateY(${props.top()}px)` }}>
+    <div class="trow clickable" ref={root} onClick={() => props.onOpen?.(props.meta)} style={{ transform: `translateY(${props.top()}px)` }}>
       <div class="cell sym">
         <span class="sym-name">{props.meta.name}</span>
         <span class="sym-sub">{props.meta.exch} • EQ</span>
@@ -149,7 +151,7 @@ function SymbolRow(props: { meta: SymMeta; top: () => number }) {
         <canvas ref={priceCanvas} style={{ width: '100%', height: SPARK_H + 'px' }} />
       </div>
       <div class="cell flow">
-        <span class="surge-val up" ref={surgeEl} />
+        <span class="surge-val up" ref={surgeEl}><span class="surge-num" ref={surgeNum} /><span class="surge-arrow" ref={surgeArrow} /></span>
         <span class="flow-track"><span class="flow-buy" ref={surgeBuy} /><span class="flow-sell" ref={surgeSell} /></span>
       </div>
       <div class="cell num turnover" ref={turnoverEl} />
@@ -165,7 +167,8 @@ function SymbolRow(props: { meta: SymMeta; top: () => number }) {
           const above = r.bottom > window.innerHeight - 180
           setDepthPop({ idx: i, x: r.left, y: above ? r.top : r.bottom, above })
         }}
-        onMouseLeave={() => setDepthPop(null)}>
+        onMouseLeave={() => setDepthPop(null)}
+        onClick={(e) => e.stopPropagation()}>
         <span class="depth-bar"><span class="depth-buy" ref={depthBuy} /></span>
       </div>
       <div class="cell num fresh">

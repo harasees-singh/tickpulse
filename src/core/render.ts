@@ -4,10 +4,31 @@
 
 import {
   ltp, chgPct, cumVol, rvol, alertUntil, alertTier, buyFlow, sellFlow,
-  histPrice, prevClose, vwap, open, low, high, lastTickAt, depth, histHead, HIST
+  vwap, open, low, high, lastTickAt, depth
 } from './store'
 import { fmtPrice, fmtTurnover, fmtAge } from './format'
 import { palette } from './theme'
+import { drawPriceSeries } from './chart'
+
+export type SurgeClass = 'zero' | 'up' | 'down'
+
+/**
+ * Colour class for the Vol Surge value. Muted grey ONLY for a no-surge reading
+ * (rvol rounds to 0.00×); otherwise green for net buying / red for net selling.
+ * It must NEVER be a plain/neutral colour for a NON-ZERO value — that bug has
+ * surfaced twice (first grey, then white), so render.test.ts locks it.
+ * @param bp buy proportion = buyFlow / (buyFlow + sellFlow); 0.5 when no flow.
+ */
+export function surgeClass(rvol: number, bp: number): SurgeClass {
+  if (rvol < 0.005) return 'zero'
+  return bp >= 0.5 ? 'up' : 'down'
+}
+
+/** Flow-direction glyph: ▲ strong buy · ▼ strong sell · · balanced / no surge. */
+export function surgeArrow(rvol: number, bp: number): '▲' | '▼' | '·' {
+  if (rvol < 0.005) return '·'
+  return bp >= 0.55 ? '▲' : bp <= 0.45 ? '▼' : '·'
+}
 
 export interface RowRefs {
   idx: number
@@ -15,6 +36,8 @@ export interface RowRefs {
   ltpEl: HTMLElement
   chgEl: HTMLElement
   surgeEl: HTMLElement
+  surgeNum: HTMLElement
+  surgeArrow: HTMLElement
   surgeBuy: HTMLElement
   surgeSell: HTMLElement
   turnoverEl: HTMLElement
@@ -74,80 +97,7 @@ function flash(el: HTMLElement) {
 // Intraday price line, colored green/red by current price vs previous close,
 // with a dotted reference line at the previous close.
 function drawPriceLine(r: RowRefs) {
-  const i = r.idx
-  const ctx = r.priceCtx
-  const W = r.priceW
-  const H = r.priceH
-  ctx.clearRect(0, 0, W, H)
-
-  const head = histHead[i]
-  const pc = prevClose[i]
-  const vw = vwap[i]
-  let lo = pc
-  let hi = pc
-  for (let k = 0; k < HIST; k++) {
-    const v = histPrice[i * HIST + k]
-    if (v > 0) {
-      if (v < lo) lo = v
-      if (v > hi) hi = v
-    }
-  }
-  if (vw > 0) {
-    if (vw < lo) lo = vw
-    if (vw > hi) hi = vw
-  }
-  if (hi - lo < 1e-6) {
-    hi = pc * 1.001
-    lo = pc * 0.999
-  }
-  const pad = (hi - lo) * 0.15
-  lo -= pad
-  hi += pad
-  const yOf = (v: number) => H - 2 - ((v - lo) / (hi - lo)) * (H - 4)
-
-  const up = ltp[i] >= pc
-  const stroke = up ? palette.up : palette.down
-
-  // dotted previous-close baseline (grey)
-  const yc = yOf(pc)
-  ctx.save()
-  ctx.setLineDash([2, 2])
-  ctx.strokeStyle = palette.prevClose
-  ctx.lineWidth = 1
-  ctx.beginPath()
-  ctx.moveTo(0, yc)
-  ctx.lineTo(W, yc)
-  ctx.stroke()
-  // VWAP reference (blue dotted)
-  if (vw > 0) {
-    const yv = yOf(vw)
-    ctx.setLineDash([1, 2])
-    ctx.strokeStyle = palette.vwap
-    ctx.beginPath()
-    ctx.moveTo(0, yv)
-    ctx.lineTo(W, yv)
-    ctx.stroke()
-  }
-  ctx.restore()
-
-  // price line (oldest → newest), skipping un-filled samples
-  const stepX = W / (HIST - 1)
-  ctx.beginPath()
-  let started = false
-  for (let k = 0; k < HIST; k++) {
-    const v = histPrice[i * HIST + ((head + k) % HIST)]
-    if (v <= 0) continue
-    const x = k * stepX
-    const y = yOf(v)
-    if (started) ctx.lineTo(x, y)
-    else {
-      ctx.moveTo(x, y)
-      started = true
-    }
-  }
-  ctx.lineWidth = 1.5
-  ctx.strokeStyle = stroke
-  ctx.stroke()
+  drawPriceSeries(r.priceCtx, r.idx, r.priceW, r.priceH)
 }
 
 function updateRow(r: RowRefs, now: number) {
@@ -172,11 +122,13 @@ function updateRow(r: RowRefs, now: number) {
   const sf = sellFlow[i]
   const tot = bf + sf
   const bp = tot > 0 ? bf / tot : 0.5
-  const flowCls = bp >= 0.55 ? 'up' : bp <= 0.45 ? 'down' : 'flat'
-  r.surgeEl.textContent = rv.toFixed(2) + 'x' + (flowCls === 'up' ? ' ▲' : flowCls === 'down' ? ' ▼' : ' ·')
-  // Grey ONLY when there's no surge (displays as 0.00×). Otherwise tint by flow
-  // direction — neutral flow uses normal text, not a "disabled" grey.
-  r.surgeEl.className = 'surge-val ' + (rv < 0.005 ? 'zero' : flowCls)
+  // Number and arrow are separate fixed-width slots so neither the RVOL digit
+  // count nor the arrow glyph ever shifts the layout.
+  r.surgeNum.textContent = rv.toFixed(2) + 'x'
+  r.surgeArrow.textContent = surgeArrow(rv, bp)
+  // Colour: muted grey ONLY for a no-surge (0.00×); else green/red by net flow
+  // lean (see surgeClass — locked by render.test.ts). Never plain white.
+  r.surgeEl.className = 'surge-val ' + surgeClass(rv, bp)
   r.surgeBuy.style.width = bp * 100 + '%'
   r.surgeSell.style.width = (1 - bp) * 100 + '%'
 

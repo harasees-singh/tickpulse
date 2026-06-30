@@ -19,10 +19,11 @@ export interface TerminalCtx {
   live: Accessor<boolean>
   userName: Accessor<string | null>
   feedIdle: Accessor<boolean>
-  // --- breadth / pressure / VWAP positioning ---
+  // --- breadth / pressure / VWAP positioning (over the filtered set) ---
   adv: Accessor<number>
   dec: Accessor<number>
   aboveVwap: Accessor<number>
+  tracked: Accessor<number>
   buy: Accessor<number>
   sell: Accessor<number>
   // --- mock-feed controls (no-ops on the live adapter) ---
