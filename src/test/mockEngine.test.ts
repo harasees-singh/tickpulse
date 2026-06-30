@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { MockEngine } from './mockEngine'
-import { expectValidKiteTick } from '../test/tickShape'
+import { MockEngine } from '../mock/mockEngine'
+import { expectValidKiteTick } from './tickShape'
 
 describe('MockEngine — Kite-shaped stand-in contract', () => {
   it('emits full-mode ticks that satisfy the KiteTick contract', () => {

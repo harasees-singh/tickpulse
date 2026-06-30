@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { parseBinary } from './kiteTicker'
-import { expectValidKiteTick } from '../test/tickShape'
+import { parseBinary } from '../data/kiteTicker'
+import { expectValidKiteTick } from './tickShape'
 
 // --- assemble a Kite binary frame EXACTLY as wss://ws.kite.trade sends it ---
 // (big-endian: int16 packet-count, then per packet: int16 length + payload).

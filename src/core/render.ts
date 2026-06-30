@@ -3,29 +3,35 @@
 // directly. Constant work per frame = O(visible rows), independent of tick rate.
 
 import {
-  ltp, chgPct, cumVol, rvol, alertUntil, alertTier,
-  buyFlow, sellFlow, histVol, histPrice, prevClose, vwap, histHead, HIST
+  ltp, chgPct, cumVol, rvol, alertUntil, alertTier, buyFlow, sellFlow,
+  histPrice, prevClose, vwap, open, low, high, lastTickAt, depth, histHead, HIST
 } from './store'
-import { fmtPrice, fmtVol } from './format'
+import { fmtPrice, fmtTurnover, fmtAge } from './format'
+import { palette } from './theme'
 
 export interface RowRefs {
   idx: number
   root: HTMLElement
   ltpEl: HTMLElement
   chgEl: HTMLElement
-  volEl: HTMLElement
   surgeEl: HTMLElement
   surgeBuy: HTMLElement
   surgeSell: HTMLElement
-  ctx: CanvasRenderingContext2D
-  canvasW: number
-  canvasH: number
+  turnoverEl: HTMLElement
+  ltpDot: HTMLElement
+  vwapTick: HTMLElement
+  openTick: HTMLElement
+  depthBuy: HTMLElement
+  freshDot: HTMLElement
+  freshEl: HTMLElement
   priceCtx: CanvasRenderingContext2D
   priceW: number
   priceH: number
   lastLtp: number
-  lastVol: number
+  lastTurnover: number
   lastTier: number
+  lastFresh: string
+  lastAgeText: string
 }
 
 // Only visible rows are registered (mount/unmount), so the pump naturally does
@@ -59,53 +65,11 @@ export function startPump(onFrame: (now: number, fps: number) => void) {
 // the few visible cells only). Matches the design's "primary highlight" pulse.
 function flash(el: HTMLElement) {
   el.animate(
-    [{ backgroundColor: 'rgba(212,227,255,0.9)' }, { backgroundColor: 'rgba(212,227,255,0)' }],
+    [{ backgroundColor: palette.flashPeak }, { backgroundColor: palette.flashRest }],
     { duration: 500, easing: 'ease-out' }
   )
 }
 
-// Velocity sparkline: area + line, colored green/red by recent trend.
-function drawSpark(r: RowRefs) {
-  const i = r.idx
-  const ctx = r.ctx
-  const W = r.canvasW
-  const H = r.canvasH
-  ctx.clearRect(0, 0, W, H)
-
-  const head = histHead[i]
-  let max = 1
-  for (let k = 0; k < HIST; k++) {
-    const v = histVol[i * HIST + k]
-    if (v > max) max = v
-  }
-  const first = histVol[i * HIST + head]
-  const last = histVol[i * HIST + ((head + HIST - 1) % HIST)]
-  const rising = last >= first
-  const stroke = rising ? '#006e12' : '#b02528'
-  const fill = rising ? 'rgba(0,110,18,0.12)' : 'rgba(176,37,40,0.12)'
-
-  const stepX = W / (HIST - 1)
-  const yOf = (v: number) => H - 2 - (v / max) * (H - 6)
-
-  ctx.beginPath()
-  ctx.moveTo(0, H)
-  for (let k = 0; k < HIST; k++) ctx.lineTo(k * stepX, yOf(histVol[i * HIST + ((head + k) % HIST)]))
-  ctx.lineTo(W, H)
-  ctx.closePath()
-  ctx.fillStyle = fill
-  ctx.fill()
-
-  ctx.beginPath()
-  for (let k = 0; k < HIST; k++) {
-    const x = k * stepX
-    const y = yOf(histVol[i * HIST + ((head + k) % HIST)])
-    if (k) ctx.lineTo(x, y)
-    else ctx.moveTo(x, y)
-  }
-  ctx.lineWidth = 1.5
-  ctx.strokeStyle = stroke
-  ctx.stroke()
-}
 
 // Intraday price line, colored green/red by current price vs previous close,
 // with a dotted reference line at the previous close.
@@ -142,13 +106,13 @@ function drawPriceLine(r: RowRefs) {
   const yOf = (v: number) => H - 2 - ((v - lo) / (hi - lo)) * (H - 4)
 
   const up = ltp[i] >= pc
-  const stroke = up ? '#006e12' : '#b02528'
+  const stroke = up ? palette.up : palette.down
 
   // dotted previous-close baseline (grey)
   const yc = yOf(pc)
   ctx.save()
   ctx.setLineDash([2, 2])
-  ctx.strokeStyle = 'rgba(114,119,131,0.5)'
+  ctx.strokeStyle = palette.prevClose
   ctx.lineWidth = 1
   ctx.beginPath()
   ctx.moveTo(0, yc)
@@ -158,7 +122,7 @@ function drawPriceLine(r: RowRefs) {
   if (vw > 0) {
     const yv = yOf(vw)
     ctx.setLineDash([1, 2])
-    ctx.strokeStyle = 'rgba(0,92,171,0.6)'
+    ctx.strokeStyle = palette.vwap
     ctx.beginPath()
     ctx.moveTo(0, yv)
     ctx.lineTo(W, yv)
@@ -189,6 +153,7 @@ function drawPriceLine(r: RowRefs) {
 function updateRow(r: RowRefs, now: number) {
   const i = r.idx
 
+  // LTP (flash on change)
   const price = ltp[i]
   if (price !== r.lastLtp) {
     r.ltpEl.textContent = fmtPrice(price)
@@ -196,17 +161,12 @@ function updateRow(r: RowRefs, now: number) {
     r.lastLtp = price
   }
 
+  // Chg% pill
   const c = chgPct[i]
-  const dirCls = c > 0.01 ? 'up' : c < -0.01 ? 'down' : 'flat'
   r.chgEl.textContent = (c > 0 ? '+' : '') + c.toFixed(2) + '%'
-  r.chgEl.className = 'chg-pill ' + dirCls
+  r.chgEl.className = 'chg-pill ' + (c > 0.01 ? 'up' : c < -0.01 ? 'down' : 'flat')
 
-  const v = cumVol[i]
-  if (v !== r.lastVol) {
-    r.volEl.textContent = fmtVol(v)
-    r.lastVol = v
-  }
-
+  // Vol Surge • Flow — RVOL× + ▲/▼, with a full-width buyer/seller split bar.
   const rv = rvol[i]
   const bf = buyFlow[i]
   const sf = sellFlow[i]
@@ -214,12 +174,55 @@ function updateRow(r: RowRefs, now: number) {
   const bp = tot > 0 ? bf / tot : 0.5
   const flowCls = bp >= 0.55 ? 'up' : bp <= 0.45 ? 'down' : 'flat'
   r.surgeEl.textContent = rv.toFixed(2) + 'x' + (flowCls === 'up' ? ' ▲' : flowCls === 'down' ? ' ▼' : ' ·')
-  r.surgeEl.className = 'surge-val ' + flowCls
-  // Bar length = surge magnitude; green/red split = buyer- vs seller-initiated.
-  const magPct = Math.max(0, Math.min(100, (rv / 4) * 100))
-  r.surgeBuy.style.width = magPct * bp + '%'
-  r.surgeSell.style.width = magPct * (1 - bp) + '%'
+  // Grey ONLY when there's no surge (displays as 0.00×). Otherwise tint by flow
+  // direction — neutral flow uses normal text, not a "disabled" grey.
+  r.surgeEl.className = 'surge-val ' + (rv < 0.005 ? 'zero' : flowCls)
+  r.surgeBuy.style.width = bp * 100 + '%'
+  r.surgeSell.style.width = (1 - bp) * 100 + '%'
 
+  // Turnover ₹ (only on change)
+  const to = vwap[i] * cumVol[i]
+  if (to !== r.lastTurnover) {
+    r.turnoverEl.textContent = fmtTurnover(to)
+    r.lastTurnover = to
+  }
+
+  // Day Range — LTP position between day low..high, with VWAP + open ticks.
+  const lo = low[i]
+  const span = high[i] - lo
+  if (span > 1e-9) {
+    const pos = (x: number) => Math.max(4, Math.min(96, ((x - lo) / span) * 100))
+    r.ltpDot.style.left = pos(price) + '%'
+    r.vwapTick.style.left = pos(vwap[i]) + '%'
+    r.openTick.style.left = pos(open[i]) + '%'
+  }
+
+  // Depth — buy share of the (≤5-level) order book.
+  const d = depth[i]
+  let buyShare = 0.5
+  if (d) {
+    let bq = 0
+    let sq = 0
+    for (let k = 0; k < d.buy.length; k++) bq += d.buy[k].quantity
+    for (let k = 0; k < d.sell.length; k++) sq += d.sell[k].quantity
+    if (bq + sq > 0) buyShare = bq / (bq + sq)
+  }
+  r.depthBuy.style.width = buyShare * 100 + '%'
+
+  // Fresh — dot bucket + age text (only on change).
+  const age = now - lastTickAt[i]
+  const fresh = lastTickAt[i] === 0 ? 'stale' : age < 1500 ? 'new' : age < 6000 ? 'fresh' : 'stale'
+  if (fresh !== r.lastFresh) {
+    r.freshDot.className = 'fresh-dot ' + fresh
+    r.lastFresh = fresh
+  }
+  const ageText = lastTickAt[i] === 0 ? '—' : fmtAge(age)
+  if (ageText !== r.lastAgeText) {
+    r.freshEl.textContent = ageText
+    r.lastAgeText = ageText
+  }
+
+  // Breakout tier glow
   const tier = now < alertUntil[i] ? alertTier[i] : 0
   if (tier !== r.lastTier) {
     r.root.classList.toggle('alert-1', tier === 1)
@@ -228,6 +231,5 @@ function updateRow(r: RowRefs, now: number) {
     r.lastTier = tier
   }
 
-  drawSpark(r)
   drawPriceLine(r)
 }

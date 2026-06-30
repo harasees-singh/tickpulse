@@ -2,7 +2,7 @@
 // adapter would. To go live later you swap `new MockTicker()` for the real
 // adapter and nothing downstream changes (see DESIGN.md §12).
 
-import type { KiteTick, Ticker, TickHandler, Mode } from './kite'
+import type { KiteTick, Ticker, TickHandler, Mode } from '../data/kite'
 
 export class MockTicker implements Ticker {
   private w: Worker

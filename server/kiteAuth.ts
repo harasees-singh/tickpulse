@@ -13,6 +13,7 @@
 import type { Plugin } from 'vite'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createHash } from 'node:crypto'
+import { getInstruments, filterInstruments } from './instruments'
 
 const KITE_LOGIN = 'https://kite.zerodha.com/connect/login'
 const KITE_TOKEN = 'https://api.kite.trade/session/token'
@@ -69,6 +70,20 @@ export function kiteAuth(opts: { apiKey: string; apiSecret: string }): Plugin {
             })
           } catch {
             return json(200, { connected: false })
+          }
+        }
+
+        // ---- instrument search (public dump; no access token required) ----
+        if (path === '/auth/instruments') {
+          try {
+            const rows = await getInstruments()
+            return json(200, filterInstruments(rows, {
+              q: url.searchParams.get('q') ?? undefined,
+              exchange: url.searchParams.get('exchange') ?? undefined,
+              limit: Number(url.searchParams.get('limit')) || undefined
+            }))
+          } catch {
+            return json(502, { error: 'instruments_unavailable' })
           }
         }
 

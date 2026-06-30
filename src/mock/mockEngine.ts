@@ -1,8 +1,8 @@
 // Pure, DOM-free tick generator. Runs inside the Web Worker. Produces objects
 // shaped EXACTLY like real KiteTicker "full" ticks (see DESIGN.md §5).
 
-import { UNIVERSE, type SymSpec } from './universe'
-import type { KiteTick, KiteDepthItem } from './kite'
+import { UNIVERSE, type SymSpec } from '../data/universe'
+import type { KiteTick, KiteDepthItem } from '../data/kite'
 
 interface SymState extends SymSpec {
   price: number

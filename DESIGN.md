@@ -323,38 +323,40 @@ function startPump(getVisibleRange: () => [number, number]) {
 ```
 tickpulse/
 ├─ index.html
-├─ vite.config.ts                 # COOP/COEP headers for SharedArrayBuffer
+├─ vite.config.ts                 # dev server + dev-only Kite auth plugin
+├─ vitest.config.ts               # standalone test config (node env)
 ├─ package.json
-├─ tsconfig.json                  # extend current: "module":"ESNext","lib":["ES2022","DOM"]
+├─ tsconfig.json
 └─ src/
-   ├─ main.tsx
-   ├─ app/
-   │  ├─ App.tsx
-   │  └─ components/
-   │     ├─ SymbolTable.tsx        # TanStack Virtual host
-   │     ├─ SymbolRow.tsx          # structure only; values patched by pump
-   │     ├─ Sparkline.tsx          # canvas element + ctx ref
-   │     ├─ AlertsPanel.tsx
-   │     ├─ Toasts.tsx
-   │     └─ Controls.tsx           # filter / sort / chaos-RPS / mute
-   ├─ data/
-   │  ├─ ticker.ts                 # TickerClient interface + Tick type
-   │  ├─ mockTicker.worker.ts      # realistic generator (worker)
-   │  ├─ kiteTicker.ts             # real binary adapter (parses frames)
-   │  ├─ store.ts                  # SoA typed arrays over SharedArrayBuffer
-   │  ├─ stats.ts                  # EWMA mean/var, RVOL, z-score
-   │  └─ alerts.ts                 # tiers, cooldown, ring buffer
-   ├─ render/
-   │  ├─ renderPump.ts             # rAF loop (main thread)
-   │  └─ sparklineRenderer.ts      # (Offscreen)Canvas drawing
-   └─ ui/theme.css
+   ├─ main.tsx                    # Solid entry — mounts <App>
+   ├─ styles.css                  # global theme
+   ├─ core/                       # engine: data plane + render plane + utils
+   │  ├─ store.ts                 # SoA typed arrays; ingest + EWMA/RVOL/z-score + tiered alerts
+   │  ├─ render.ts                # rAF pump: DOM patch + canvas sparkline / price line
+   │  └─ format.ts                # number / volume / time formatting
+   ├─ data/                       # real Kite layer
+   │  ├─ kite.ts                  # KiteTick types + Ticker interface
+   │  ├─ kiteTicker.ts            # real binary-frame adapter (parseBinary)
+   │  └─ universe.ts              # tracked instrument universe
+   ├─ mock/                       # simulated feed (dev / no Zerodha session)
+   │  ├─ mockEngine.ts            # pure, DOM-free Kite-shaped tick generator
+   │  ├─ mockTicker.worker.ts     # drives the engine off-thread, posts batched ticks
+   │  └─ mockTicker.ts            # Ticker adapter wrapping the worker
+   ├─ test/                       # vitest specs + shared helpers
+   │  ├─ store.test.ts
+   │  ├─ kiteTicker.test.ts
+   │  ├─ mockEngine.test.ts
+   │  └─ tickShape.ts             # KiteTick contract assertion helper
+   └─ ui/                         # Solid components
+      ├─ App.tsx                  # shell, controls, bento widgets, data-source wiring
+      └─ SymbolTable.tsx          # virtualized table + per-row canvas refs
 ```
 
-> **Note:** SharedArrayBuffer requires cross-origin isolation. Add
-> `Cross-Origin-Opener-Policy: same-origin` and
-> `Cross-Origin-Embedder-Policy: require-corp` via `vite.config.ts` dev server
-> headers. If isolation isn't available, fall back to `postMessage` with
-> transferable `ArrayBuffer`s (slightly higher latency, still fine at 500/s).
+> **Note:** This POC streams ticks via `postMessage` (batched per frame) — no
+> cross-origin isolation required. To later move the SoA stats into a
+> `SharedArrayBuffer`, add `Cross-Origin-Opener-Policy: same-origin` and
+> `Cross-Origin-Embedder-Policy: require-corp` dev-server headers in
+> `vite.config.ts`.
 
 ---
 
