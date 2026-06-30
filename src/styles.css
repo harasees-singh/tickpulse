@@ -198,7 +198,8 @@ body {
 .conn .material-symbols-outlined { font-size: 18px; }
 .conn b.ok { color: var(--secondary); }
 .conn b.stalled { color: var(--tertiary); }
-.conn b.weak { color: var(--caution); }
+.conn b.weak { color: var(--tertiary); }
+.conn b.fair { color: var(--caution); }
 .conn b.paused { color: var(--outline); }
 .net-detail { color: var(--outline); font-size: 11px; margin-left: 2px; }
 

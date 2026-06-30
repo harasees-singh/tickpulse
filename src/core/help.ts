@@ -115,8 +115,8 @@ export const HELP = {
   },
   conn: {
     label: 'Connection',
-    how: 'Browser online state (navigator.onLine) plus the Network Information API estimate (Chromium only).',
-    means: "Your device's network health — not a server reachability probe."
+    how: 'A tiny ping to /auth/ping every 4s — the round-trip is smoothed (EWMA) and mapped to bars (<60ms excellent · <150 good · <400 fair · slower poor).',
+    means: 'A real measurement of how snappy your network is to this server — not just a browser hint.'
   }
 } satisfies Record<HelpId, HelpEntry>
 

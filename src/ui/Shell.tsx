@@ -119,17 +119,41 @@ export default function Shell(props: RouteSectionProps) {
       subscribed = next
     }
     const unsubWatchlist = subscribeSettings(syncSubscriptions)
-    // User's real network health: online state + Network Information API.
+    // Real network health: ping our own server every 4s and measure the actual
+    // round-trip. RTT → bars (4 best, 0 offline). navigator.connection.downlink
+    // (Chromium only) caps strength if bandwidth is poor. navigator.onLine
+    // flips strength to 0 instantly without waiting for the next ping.
     const conn = (navigator as any).connection
-    const updateNet = () => {
-      setOnline(navigator.onLine)
-      setNetType(conn?.effectiveType ?? '')
-      setNetRtt(typeof conn?.rtt === 'number' ? conn.rtt : null)
+    const updateOnline = () => setOnline(navigator.onLine)
+    updateOnline()
+    window.addEventListener('online', updateOnline)
+    window.addEventListener('offline', updateOnline)
+
+    async function measurePing() {
+      if (!navigator.onLine) {
+        setNetRtt(null)
+        return
+      }
+      const ctrl = new AbortController()
+      const timeout = setTimeout(() => ctrl.abort(), 3500)
+      const t0 = performance.now()
+      try {
+        await fetch('/auth/ping?t=' + t0, { cache: 'no-store', signal: ctrl.signal })
+        const rtt = performance.now() - t0
+        // EWMA smoothing so a single spike doesn't flicker the bars (α=0.4).
+        setNetRtt((prev) => (prev == null ? rtt : prev + 0.4 * (rtt - prev)))
+      } catch {
+        setNetRtt(null) // timeout / failure
+      } finally {
+        clearTimeout(timeout)
+      }
     }
-    updateNet()
-    window.addEventListener('online', updateNet)
-    window.addEventListener('offline', updateNet)
-    conn?.addEventListener?.('change', updateNet)
+    measurePing()
+    const pingTimer = setInterval(measurePing, 4000)
+    // Surface effective downlink hint when available (Chromium) — used as a cap.
+    const updateDownlink = () => setNetType(conn?.effectiveType ?? '')
+    updateDownlink()
+    conn?.addEventListener?.('change', updateDownlink)
 
     const orderTimer = setInterval(() => setOrder(computeOrder(sort(), filters(), sortDir())), 750)
     const statsTimer = setInterval(() => {
@@ -186,9 +210,10 @@ export default function Shell(props: RouteSectionProps) {
     onCleanup(() => {
       clearInterval(orderTimer)
       clearInterval(statsTimer)
-      window.removeEventListener('online', updateNet)
-      window.removeEventListener('offline', updateNet)
-      conn?.removeEventListener?.('change', updateNet)
+      clearInterval(pingTimer)
+      window.removeEventListener('online', updateOnline)
+      window.removeEventListener('offline', updateOnline)
+      conn?.removeEventListener?.('change', updateDownlink)
       unsubWatchlist()
       ticker?.disconnect()
     })
@@ -252,14 +277,38 @@ export default function Shell(props: RouteSectionProps) {
 
   // --- shell-local derived (ws-status + sidebar connection) ---
   const fpsCls = () => (fps() >= 55 ? '' : fps() >= 30 ? 'warn' : 'bad')
-  const netSlow = () => netType() === '2g' || netType() === 'slow-2g'
-  const connLabel = () => (!online() ? 'Offline' : netSlow() ? 'Weak' : 'Online')
-  const connCls = () => (!online() ? 'stalled' : netSlow() ? 'weak' : 'ok')
+  // Network strength = measured RTT band, capped by effectiveType when poor.
+  // 0 offline · 1 poor · 2 fair · 3 good · 4 excellent.
+  const netBars = () => {
+    if (!online()) return 0
+    const r = netRtt()
+    if (r == null) return 1 // online but last ping failed
+    let bars = r < 60 ? 4 : r < 150 ? 3 : r < 400 ? 2 : 1
+    const et = netType()
+    if (et === '2g' || et === 'slow-2g') bars = Math.min(bars, 1)
+    else if (et === '3g') bars = Math.min(bars, 2)
+    return bars
+  }
+  const netIcon = () => {
+    const b = netBars()
+    if (b === 0) return 'signal_wifi_off'
+    if (b === 4) return 'signal_wifi_4_bar'
+    if (b === 3) return 'network_wifi_3_bar'
+    if (b === 2) return 'network_wifi_2_bar'
+    return 'network_wifi_1_bar'
+  }
+  const connLabel = () => {
+    const b = netBars()
+    return ['Offline', 'Poor', 'Fair', 'Good', 'Excellent'][b]
+  }
+  const connCls = () => {
+    const b = netBars()
+    return b === 0 ? 'stalled' : b === 1 ? 'weak' : b === 2 ? 'fair' : 'ok'
+  }
   const netDetail = () => {
-    const parts: string[] = []
-    if (netType()) parts.push(netType().toUpperCase())
-    if (netRtt() != null) parts.push(netRtt() + 'ms')
-    return parts.length ? ' · ' + parts.join(' · ') : ''
+    const r = netRtt()
+    if (r == null) return ''
+    return ' · ' + Math.round(r) + ' ms'
   }
   const latText = () => (wsLat() < 10 ? wsLat().toFixed(1) : Math.round(wsLat()).toString())
   const latCls = () => (wsLat() < 50 ? '' : wsLat() < 150 ? 'warn' : 'bad')
@@ -294,7 +343,7 @@ export default function Shell(props: RouteSectionProps) {
           <A href="/settings" class="nav-item" activeClass="active" end><Icon n="settings" /> Settings</A>
         </nav>
         <div class="sidebar-foot">
-          <div class="conn" title={helpText('conn')}><Icon n="wifi" /> Connection: <b class={connCls()}>{connLabel()}</b><span class="net-detail">{netDetail()}</span></div>
+          <div class="conn" title={helpText('conn')}><Icon n={netIcon()} /> <b class={connCls()}>{connLabel()}</b><span class="net-detail">{netDetail()}</span></div>
           <Show when={useMock()}>
             <div class="conn demo-badge"><Icon n="construction" /> Demo mode (dev)</div>
           </Show>
@@ -304,11 +353,7 @@ export default function Shell(props: RouteSectionProps) {
       {/* ---------------- main ---------------- */}
       <main class="main">
         <header class="topnav">
-          <div class="topnav-left">
-            <nav class="tabs">
-              <span class="tab active" title="National Stock Exchange — the segment currently tracked">NSE</span>
-            </nav>
-          </div>
+          <div class="topnav-left" />
           <button class="topnav-search" onClick={() => openPalette()} title={'Search symbols (' + SHORTCUT_LABEL + ')'}>
             <Icon n="search" />
             <span class="topnav-search-text">Search symbols…</span>

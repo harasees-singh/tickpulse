@@ -54,6 +54,12 @@ export function kiteAuth(opts: { apiKey: string; apiSecret: string }): Plugin {
           res.end()
         }
 
+        // ---- ping: tiny no-cache endpoint for measuring network latency ----
+        if (path === '/auth/ping') {
+          res.setHeader('cache-control', 'no-store, max-age=0')
+          return json(200, { t: Date.now() })
+        }
+
         // ---- session: always JSON so the SPA can poll it ----
         if (path === '/auth/session') {
           if (!configured) return json(200, { connected: false, reason: 'config' })
