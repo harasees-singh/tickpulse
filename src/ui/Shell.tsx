@@ -5,7 +5,8 @@ import { KiteTickerAdapter } from '../data/kiteTicker'
 import type { Ticker } from '../data/kite'
 import {
   ingest, computeOrder, drainAlerts, getAndResetIngestCount,
-  getBreakoutConfig, setBreakoutConfig, applyWatchlist, ensureSlot, DEFAULT_SCAN_FILTERS, naturalDir,
+  getBreakoutConfig, setBreakoutConfig, applyWatchlist, ensureSlot,
+  seedScannerWatchlist, activeScannerTokens, DEFAULT_SCAN_FILTERS, naturalDir,
   N, chgPct, buyQty, sellQty, ltp, vwap, type Alert, type SortKey, type SortDir, type ScanFilters
 } from '../core/store'
 import { startPump } from '../core/render'
@@ -22,10 +23,16 @@ import { TerminalContext, type TerminalCtx } from './terminal'
 // is handed to pages via <TerminalContext>; shell-local UI (search, ws-status,
 // toasts, connection) stays here.
 export default function Shell(props: RouteSectionProps) {
+  // First-run seed: put the base universe in the scanner watchlist so the board
+  // opens with 5 stocks (idempotent; never re-seeds once the user edits it).
+  seedScannerWatchlist()
+
   const [sort, setSort] = createSignal<SortKey>('symbol')
   const [sortDir, setSortDir] = createSignal<SortDir>('asc')
   const [filters, setFilters] = createSignal<ScanFilters>(DEFAULT_SCAN_FILTERS)
-  const [order, setOrder] = createSignal<number[]>(computeOrder('symbol', DEFAULT_SCAN_FILTERS, 'asc'))
+  // The board only shows the scanner watchlist (activeScannerTokens); computeOrder
+  // is restricted to those members everywhere it's called below.
+  const [order, setOrder] = createSignal<number[]>(computeOrder('symbol', DEFAULT_SCAN_FILTERS, 'asc', activeScannerTokens()))
   const [alerts, setAlerts] = createSignal<Alert[]>([])
   const [toasts, setToasts] = createSignal<Alert[]>([])
   const [fps, setFps] = createSignal(60)
@@ -66,6 +73,14 @@ export default function Shell(props: RouteSectionProps) {
   onCleanup(subscribeSettings((s) => setTheme(s.theme)))
   function toggleTheme() {
     updateSettings({ theme: theme() === 'obsidian' ? 'daylight' : 'obsidian' })
+  }
+
+  // Collapsible sidebar (icon rail) — animated width, state persisted so it
+  // survives reloads and stays in sync if changed elsewhere.
+  const [collapsed, setCollapsed] = createSignal(getSettings().sidebarCollapsed)
+  onCleanup(subscribeSettings((s) => setCollapsed(s.sidebarCollapsed)))
+  function toggleSidebar() {
+    updateSettings({ sidebarCollapsed: !collapsed() })
   }
 
   // Unread-alerts badge for the topnav bell: alert ids increase monotonically,
@@ -131,7 +146,13 @@ export default function Shell(props: RouteSectionProps) {
       if (toRemove.length) ticker.unsubscribe(toRemove)
       subscribed = next
     }
-    const unsubWatchlist = subscribeSettings(syncSubscriptions)
+    // On any settings change, (live) re-sync socket subscriptions AND re-derive
+    // the board so scanner add/remove is reflected immediately.
+    const onSettingsChange = () => {
+      syncSubscriptions()
+      setOrder(computeOrder(sort(), filters(), sortDir(), activeScannerTokens()))
+    }
+    const unsubWatchlist = subscribeSettings(onSettingsChange)
     // Real network health: ping our own server every 4s and measure the actual
     // round-trip. RTT → bars (4 best, 0 offline). navigator.connection.downlink
     // (Chromium only) caps strength if bandwidth is poor. navigator.onLine
@@ -168,7 +189,7 @@ export default function Shell(props: RouteSectionProps) {
     updateDownlink()
     conn?.addEventListener?.('change', updateDownlink)
 
-    const orderTimer = setInterval(() => setOrder(computeOrder(sort(), filters(), sortDir())), 750)
+    const orderTimer = setInterval(() => setOrder(computeOrder(sort(), filters(), sortDir(), activeScannerTokens())), 750)
     const statsTimer = setInterval(() => {
       const t = getAndResetIngestCount()
       setTps(t)
@@ -232,7 +253,7 @@ export default function Shell(props: RouteSectionProps) {
     })
   })
 
-  createEffect(() => setOrder(computeOrder(sort(), filters(), sortDir())))
+  createEffect(() => setOrder(computeOrder(sort(), filters(), sortDir(), activeScannerTokens())))
 
   // Click-to-sort: re-clicking the active column flips direction; a new column
   // resets to its natural direction (names A→Z, metrics high→low).
@@ -338,30 +359,29 @@ export default function Shell(props: RouteSectionProps) {
   }
 
   return (
-    <div class="app">
+    <div class="app" classList={{ 'sidebar-collapsed': collapsed() }}>
       {/* ---------------- sidebar ---------------- */}
       <aside class="sidebar">
         <div class="brand-block">
           <div class="brand-row">
             <img class="brand-mark" src="/tickpulse-icon.svg" width="30" height="30" alt="" />
-            <div>
+            <div class="brand-text">
               <h1>TickPulse</h1>
               <p>Terminal v2.4</p>
             </div>
+            <button class="icon-btn burger" onClick={toggleSidebar} title={collapsed() ? 'Expand sidebar' : 'Collapse sidebar'} aria-label="Toggle sidebar">
+              <Icon n="menu" />
+            </button>
           </div>
         </div>
         <nav class="nav">
-          <A href="/dashboard" class="nav-item" activeClass="active" end><Icon n="dashboard" /> Dashboard</A>
-          <A href="/marketwatch" class="nav-item" activeClass="active" end><Icon n="list_alt" /> Marketwatch</A>
-          <A href="/scanner" class="nav-item" activeClass="active" end><Icon n="leaderboard" /> Scanner</A>
-          <A href="/analytics" class="nav-item" activeClass="active"><Icon n="analytics" /> Analytics</A>
-          <A href="/alerts" class="nav-item" activeClass="active" end><Icon n="notifications_active" /> Alerts</A>
-          <A href="/settings" class="nav-item" activeClass="active" end><Icon n="settings" /> Settings</A>
+          <A href="/scanner" class="nav-item" activeClass="active" title="Scanner" end><Icon n="leaderboard" /> <span class="nav-label">Scanner</span></A>
+          <A href="/analytics" class="nav-item" activeClass="active" title="Analytics"><Icon n="analytics" /> <span class="nav-label">Analytics</span></A>
         </nav>
         <div class="sidebar-foot">
           <div class="conn" title={helpText('conn')}><Icon n={netIcon()} /> <b class={connCls()}>{connLabel()}</b><span class="net-detail">{netDetail()}</span></div>
           <Show when={useMock()}>
-            <div class="conn demo-badge"><Icon n="construction" /> Demo mode (dev)</div>
+            <div class="conn demo-badge"><Icon n="construction" /> <span class="nav-label">Demo mode (dev)</span></div>
           </Show>
         </div>
       </aside>
@@ -372,7 +392,7 @@ export default function Shell(props: RouteSectionProps) {
           <div class="topnav-left" />
           <button class="topnav-search" onClick={() => openPalette()} title={'Search symbols (' + SHORTCUT_LABEL + ')'}>
             <Icon n="search" />
-            <span class="topnav-search-text">Search symbols…</span>
+            <span class="topnav-search-text">Search stocks…</span>
             <span class="kbd-row">
               <kbd class="kbd-cap">{SHORTCUT_KEYS[0]}</kbd>
               <kbd class="kbd-cap">{SHORTCUT_KEYS[1]}</kbd>
@@ -386,6 +406,7 @@ export default function Shell(props: RouteSectionProps) {
             <button class="icon-btn" onClick={toggleTheme} title={theme() === 'obsidian' ? 'Switch to Daylight (light)' : 'Switch to Obsidian (dark)'}>
               <Icon n={theme() === 'obsidian' ? 'light_mode' : 'dark_mode'} />
             </button>
+            <A href="/settings" class="icon-btn" activeClass="active" title="Settings"><Icon n="settings" /></A>
             <A class="avatar" href="/profile" title={userName() ?? 'Account'}>{(userName() ?? 'T').charAt(0).toUpperCase()}</A>
           </div>
         </header>

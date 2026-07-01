@@ -56,6 +56,8 @@ export interface Settings {
   muted: number[] // tokens
   devMock: boolean // dev-only: use the simulated feed instead of the live socket
   watchlistMeta: Record<number, { name: string; exch: string }> // token → meta (names survive reload)
+  scannerSeeded: boolean // has the scanner watchlist been seeded with the base universe once?
+  sidebarCollapsed: boolean // left navbar minimized to an icon rail
 }
 
 export const SETTINGS_DEFAULTS: Settings = {
@@ -70,7 +72,9 @@ export const SETTINGS_DEFAULTS: Settings = {
   pinned: [],
   muted: [],
   devMock: false,
-  watchlistMeta: {}
+  watchlistMeta: {},
+  scannerSeeded: false,
+  sidebarCollapsed: false
 }
 
 // --- helpers --------------------------------------------------------------
@@ -194,31 +198,8 @@ export function subscribeSettings(fn: (s: Settings) => void): () => void {
   }
 }
 
-// --- watchlist mutations (Marketwatch) ------------------------------------
-export function setActiveWatchlist(id: string): void {
-  updateSettings({ activeWatchlist: id })
-  saveSettings()
-}
-export function createWatchlist(name: string): string {
-  const id = 'wl-' + Date.now().toString(36)
-  const s = getSettings()
-  updateSettings({ watchlists: [...s.watchlists, { id, name: name || 'New list', tokens: [], enabled: true }], activeWatchlist: id })
-  saveSettings()
-  return id
-}
-export function renameWatchlist(id: string, name: string): void {
-  const s = getSettings()
-  updateSettings({ watchlists: s.watchlists.map((w) => (w.id === id ? { ...w, name } : w)) })
-  saveSettings()
-}
-export function deleteWatchlist(id: string): void {
-  const s = getSettings()
-  const rest = s.watchlists.filter((w) => w.id !== id)
-  const next = rest.length ? rest : [{ id: 'default', name: 'Default', tokens: [], enabled: true }]
-  const active = next.some((w) => w.id === s.activeWatchlist) ? s.activeWatchlist : next[0].id
-  updateSettings({ watchlists: next, activeWatchlist: active })
-  saveSettings()
-}
+// --- watchlist mutations (Scanner add/remove) -----------------------------
+// The app tracks a single "Default" watchlist; the Scanner adds/removes tokens.
 export function addTokenToWatchlist(id: string, token: number, meta: { name: string; exch: string }): void {
   const s = getSettings()
   updateSettings({

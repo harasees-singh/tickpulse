@@ -3,6 +3,7 @@ import { symbols, ltp, chgPct, rvol, vwap, cumVol, depth, type SymMeta, type Sor
 import { register, unregister, type RowRefs } from '../core/render'
 import { fmtPrice, fmtTurnover, fmtQty } from '../core/format'
 import { helpText, type HelpId } from '../core/help'
+import { Icon } from './Icon'
 
 const ROW_H = 56
 const OVERSCAN = 6
@@ -14,7 +15,7 @@ const [depthPop, setDepthPop] = createSignal<DepthPop | null>(null)
 
 // Lightweight custom virtualization: only ~viewport rows exist in the DOM, each
 // absolutely positioned. Keyed by stable SymMeta refs so scrolling reuses nodes.
-export default function SymbolTable(props: { order: number[]; sort: SortKey; sortDir: SortDir; onSort: (k: SortKey) => void; onOpen?: (meta: SymMeta) => void }) {
+export default function SymbolTable(props: { order: number[]; sort: SortKey; sortDir: SortDir; onSort: (k: SortKey) => void; onOpen?: (meta: SymMeta) => void; onRemove?: (meta: SymMeta) => void; onAdd?: () => void }) {
   let scroller!: HTMLDivElement
   const [scrollTop, setScrollTop] = createSignal(0)
   const [viewH, setViewH] = createSignal(560)
@@ -69,9 +70,20 @@ export default function SymbolTable(props: { order: number[]; sort: SortKey; sor
       </div>
       <div class="tbody" ref={scroller} style={{ height: bodyHeight() + 'px', 'overflow-y': 'auto' }}
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}>
+        <Show when={total() === 0}>
+          <div class="lb-empty">
+            <Show when={props.onAdd} fallback={<span>Your scanner is empty.</span>}>
+              <button class="lb-add-big" onClick={() => props.onAdd!()} title="Add stocks to your scanner">
+                <Icon n="add_circle" />
+                <span class="lb-add-big-t">Add stocks to your scanner</span>
+                <span class="lb-add-big-s">Search NSE symbols and build your board</span>
+              </button>
+            </Show>
+          </div>
+        </Show>
         <div class="spacer" style={{ height: total() * ROW_H + 'px' }}>
           <For each={visMetas()}>
-            {(meta, i) => <SymbolRow meta={meta} top={() => (start() + i()) * ROW_H} onOpen={props.onOpen} />}
+            {(meta, i) => <SymbolRow meta={meta} top={() => (start() + i()) * ROW_H} onOpen={props.onOpen} onRemove={props.onRemove} />}
           </For>
         </div>
       </div>
@@ -80,7 +92,7 @@ export default function SymbolTable(props: { order: number[]; sort: SortKey; sor
   )
 }
 
-function SymbolRow(props: { meta: SymMeta; top: () => number; onOpen?: (meta: SymMeta) => void }) {
+function SymbolRow(props: { meta: SymMeta; top: () => number; onOpen?: (meta: SymMeta) => void; onRemove?: (meta: SymMeta) => void }) {
   let root!: HTMLDivElement
   let ltpEl!: HTMLDivElement
   let chgEl!: HTMLSpanElement
@@ -175,6 +187,15 @@ function SymbolRow(props: { meta: SymMeta; top: () => number; onOpen?: (meta: Sy
         <span class="fresh-dot stale" ref={freshDot} />
         <span class="fresh-age" ref={freshEl} />
       </div>
+      <Show when={props.onRemove}>
+        <button
+          class="row-remove"
+          title={`Remove ${props.meta.name} from scanner`}
+          onClick={(e) => { e.stopPropagation(); props.onRemove!(props.meta) }}
+        >
+          <Icon n="close" />
+        </button>
+      </Show>
     </div>
   )
 }

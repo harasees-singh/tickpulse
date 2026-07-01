@@ -1,15 +1,19 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
 import { useNavigate } from '@solidjs/router'
 import { Icon } from './Icon'
-import { symbols, ensureSlot } from '../core/store'
+import { symbols, ensureSlot, addScannerStock, activeScannerTokens } from '../core/store'
+import { subscribeSettings } from '../core/settings'
 
 interface ProxyRow { instrument_token: number; tradingsymbol: string; name: string; exchange: string }
 interface Item { name: string; sub: string; tracked: boolean; token?: number; exch: string }
 
 // Module-level open state so the topnav search trigger (or any other caller)
-// can pop the palette without prop drilling.
+// can pop the palette without prop drilling. `mode` decides what selecting a row
+// does: 'search' → open Analytics · 'add' → add it to the scanner watchlist.
+type PaletteMode = 'search' | 'add'
 const [paletteOpen, setPaletteOpen] = createSignal(false)
-export function openPalette() { setPaletteOpen(true) }
+const [paletteMode, setPaletteMode] = createSignal<PaletteMode>('search')
+export function openPalette(mode: PaletteMode = 'search') { setPaletteMode(mode); setPaletteOpen(true) }
 export function closePalette() { setPaletteOpen(false) }
 
 // Mac vs non-Mac shortcut display (⌘K vs Ctrl K). Exposed as an array so the
@@ -29,12 +33,17 @@ export function CommandPalette() {
   const navigate = useNavigate()
   let inputEl: HTMLInputElement | undefined
 
+  // Bumped on any settings change so the "in scanner" state stays live while the
+  // palette is open in add-mode (nameToIdx / watchlist aren't reactive sources).
+  const [memberVer, setMemberVer] = createSignal(0)
+  onCleanup(subscribeSettings(() => setMemberVer((v) => v + 1)))
+
   // Global ⌘K / Ctrl+K
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault()
-        setOpen((v) => !v)
+        open() ? setOpen(false) : openPalette('search') // ⌘K always opens in search mode
       } else if (e.key === 'Escape' && open()) {
         e.preventDefault()
         setOpen(false)
@@ -73,12 +82,25 @@ export function CommandPalette() {
   }
 
   // Items: local matches first, then proxy rows that aren't already tracked.
+  // In add-mode, "tracked" means "already in the scanner watchlist".
   const items = createMemo<Item[]>(() => {
+    memberVer() // re-evaluate scanner membership on add/remove
+    const addMode = paletteMode() === 'add'
+    const inScanner = activeScannerTokens()
     const query = q().trim().toUpperCase()
     const local: Item[] = symbols
       .filter((s) => !query || s.name.toUpperCase().includes(query))
       .slice(0, 40)
-      .map((s) => ({ name: s.name, sub: s.exch + ' • Tracked', tracked: true, token: s.token, exch: s.exch }))
+      .map((s) => {
+        const member = inScanner.has(s.token)
+        return {
+          name: s.name,
+          sub: addMode ? (member ? s.exch + ' • In scanner' : s.exch + ' • Tap to add') : s.exch + ' • Tracked',
+          tracked: addMode ? member : true,
+          token: s.token,
+          exch: s.exch
+        }
+      })
     const localNames = new Set(local.map((i) => i.name))
     const remote: Item[] = proxy()
       .filter((r) => !localNames.has(r.tradingsymbol))
@@ -93,6 +115,20 @@ export function CommandPalette() {
   })
 
   function select(it: Item) {
+    if (paletteMode() === 'add') {
+      // Add to the scanner watchlist and stay open so several can be added in a
+      // row; the row flips to "In scanner" via memberVer.
+      if (it.token) {
+        addScannerStock({ token: it.token, name: it.name, exch: it.exch })
+        setMemberVer((v) => v + 1)
+      }
+      setQ('')
+      setProxy([])
+      setCursor(0)
+      queueMicrotask(() => inputEl?.focus())
+      return
+    }
+    // search-mode (default): register if needed, then open Analytics.
     if (!it.tracked && it.token) ensureSlot({ token: it.token, name: it.name, exch: it.exch })
     setOpen(false)
     navigate('/analytics/' + it.name)
@@ -122,13 +158,13 @@ export function CommandPalette() {
   return (
     <Show when={open()}>
       <div class="cmdk-backdrop" onClick={() => setOpen(false)}>
-        <div class="cmdk" role="dialog" aria-label="Search symbols" onClick={(e) => e.stopPropagation()} onKeyDown={onListKey}>
+        <div class="cmdk" role="dialog" aria-label={paletteMode() === 'add' ? 'Add symbols to scanner' : 'Search symbols'} onClick={(e) => e.stopPropagation()} onKeyDown={onListKey}>
           <div class="cmdk-search">
-            <Icon n="search" />
+            <Icon n={paletteMode() === 'add' ? 'add_circle' : 'search'} />
             <input
               ref={inputEl}
               type="text"
-              placeholder="Search symbols…"
+              placeholder={paletteMode() === 'add' ? 'Add stocks to your scanner…' : 'Search symbols…'}
               value={q()}
               onInput={(e) => onQuery(e.currentTarget.value)}
             />
@@ -149,7 +185,7 @@ export function CommandPalette() {
                       <span class="cmdk-item-name">{it.name}</span>
                       <span class="cmdk-item-sub">{it.sub}</span>
                     </div>
-                    <Show when={!it.tracked}>
+                    <Show when={!it.tracked} fallback={<Show when={paletteMode() === 'add'}><span class="cmdk-added">✓ In scanner</span></Show>}>
                       <span class="cmdk-add">＋ Add</span>
                     </Show>
                   </div>
@@ -159,7 +195,7 @@ export function CommandPalette() {
           </div>
           <div class="cmdk-foot">
             <span><span class="kbd-row"><span class="cmdk-kbd">↑</span><span class="cmdk-kbd">↓</span></span> navigate</span>
-            <span><span class="cmdk-kbd">⏎</span> open</span>
+            <span><span class="cmdk-kbd">⏎</span> {paletteMode() === 'add' ? 'add' : 'open'}</span>
             <span><span class="kbd-row"><span class="cmdk-kbd">{SHORTCUT_KEYS[0]}</span><span class="cmdk-kbd">{SHORTCUT_KEYS[1]}</span></span> toggle</span>
           </div>
         </div>

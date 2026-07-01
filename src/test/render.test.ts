@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { surgeClass, surgeArrow } from '../core/render'
+import { surgeClass, surgeArrow, depthTwoSided, depthSpread } from '../core/render'
 
 // Regression lock for the Vol Surge colour. The bug (a NON-ZERO RVOL with
 // balanced flow showing a plain/neutral colour) has surfaced twice — first grey,
@@ -40,6 +40,40 @@ describe('surgeArrow — Vol Surge flow glyph', () => {
     expect(surgeArrow(2, 0.7)).toBe('▲') // strong buy
     expect(surgeArrow(2, 0.3)).toBe('▼') // strong sell
     expect(surgeArrow(2, 0.5)).toBe('·') // balanced band
+  })
+})
+
+// Market-closed robustness (the depth panel showed a lone ghost row + a bogus
+// full-price "spread" of ask − 0 when the book went one-sided at close).
+const lvl = (price: number, quantity: number) => ({ price, quantity, orders: 1 })
+const twoSidedBook = { buy: [lvl(100, 50)], sell: [lvl(100.5, 40)] }
+const oneSidedBook = { buy: [lvl(0, 0)], sell: [lvl(1308, 30037)] } // only asks, no bids
+const emptyBook = { buy: [lvl(0, 0)], sell: [lvl(0, 0)] }
+
+describe('depthTwoSided — is there a live two-sided market?', () => {
+  it('true only when BOTH sides carry positive price + quantity', () => {
+    expect(depthTwoSided(twoSidedBook)).toBe(true)
+  })
+  it('false for a one-sided book (market-closed snapshot)', () => {
+    expect(depthTwoSided(oneSidedBook)).toBe(false)
+  })
+  it('false for an all-zero or missing book', () => {
+    expect(depthTwoSided(emptyBook)).toBe(false)
+    expect(depthTwoSided(undefined)).toBe(false)
+  })
+})
+
+describe('depthSpread — best bid/ask spread', () => {
+  it('is the ask − bid for a valid two-sided top-of-book', () => {
+    expect(depthSpread(twoSidedBook)).toBeCloseTo(0.5, 5)
+  })
+  it('is null for a one-sided book — never reports ask − 0 as a spread', () => {
+    expect(depthSpread(oneSidedBook)).toBeNull()
+    expect(depthSpread(emptyBook)).toBeNull()
+    expect(depthSpread(undefined)).toBeNull()
+  })
+  it('is null for a crossed/stale quote (ask < bid)', () => {
+    expect(depthSpread({ buy: [lvl(101, 10)], sell: [lvl(100, 10)] })).toBeNull()
   })
 })
 

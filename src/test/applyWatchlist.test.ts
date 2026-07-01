@@ -52,3 +52,26 @@ describe('store — applyWatchlist name resolution', () => {
   })
 })
 
+describe('store — resolveOrAdoptFromWatchlist (Analytics deep-link)', () => {
+  it('returns the existing slot for an already-tracked symbol', () => {
+    const token = 9_300_000
+    S.ensureSlot({ token, name: 'TRACKEDCO', exch: 'NSE' })
+    expect(S.resolveOrAdoptFromWatchlist('TRACKEDCO')).toBe(S.tokenToIdx.get(token))
+  })
+
+  it('adopts a watchlisted symbol (case-insensitive) without a network lookup', () => {
+    const token = 9_300_001
+    updateSettings({ watchlistMeta: { [token]: { name: 'SUZLON', exch: 'NSE' } } })
+    expect(S.resolveByName('SUZLON')).toBeUndefined() // not tracked yet
+
+    const idx = S.resolveOrAdoptFromWatchlist('suzlon') // lowercase URL still resolves
+    expect(idx).toBeGreaterThanOrEqual(0)
+    expect(S.symbols[idx].name).toBe('SUZLON') // canonical name registered
+    expect(S.tokenToIdx.get(token)).toBe(idx)
+  })
+
+  it('returns -1 for a symbol not tracked and not in any watchlist', () => {
+    expect(S.resolveOrAdoptFromWatchlist('DEFINITELYNOTREAL')).toBe(-1)
+  })
+})
+

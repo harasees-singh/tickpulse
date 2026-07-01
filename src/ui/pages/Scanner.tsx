@@ -1,18 +1,21 @@
-import { For, Show } from 'solid-js'
+import { Show } from 'solid-js'
 import { useNavigate } from '@solidjs/router'
 import SymbolTable from '../SymbolTable'
 import { Icon } from '../Icon'
 import { InfoTip } from '../InfoTip'
 import { useTerminal } from '../terminal'
-import { DEFAULT_SCAN_FILTERS, type ScanFilters } from '../../core/store'
-import { fmtTime, fmtVol } from '../../core/format'
+import { openPalette } from '../CommandPalette'
+import { DEFAULT_SCAN_FILTERS, removeScannerStock, type ScanFilters } from '../../core/store'
+import { fmtVol } from '../../core/format'
 
 // Scanner — the core board (DEV_PLAN §2.1): volume leaderboard + bento widgets.
 // All live state comes from the Shell via useTerminal(); board-only derived
-// values are computed locally to keep the shared context lean.
+// values are computed locally. Adding stocks reuses the shared command palette
+// (openPalette('add')); removing is the per-row × handled by the table.
 export default function Scanner() {
   const t = useTerminal()
   const navigate = useNavigate()
+
 
   const total = () => t.adv() + t.dec()
   const advPct = () => (total() ? (t.adv() / total()) * 100 : 50)
@@ -42,6 +45,9 @@ export default function Scanner() {
             : 'Simulated demo feed (dev mode) — switch to Live in Settings → Developer.'}</p>
         </div>
         <div class="content-actions">
+          <button class="btn-add-scan" onClick={() => openPalette('add')} title="Add stocks to your scanner">
+            <Icon n="add" /> Add stocks
+          </button>
           <Show when={!t.live()}>
             <label class="ctl">
               Load {t.rps().toFixed(1)}×
@@ -57,9 +63,6 @@ export default function Scanner() {
             <button class="ghost-btn" classList={{ on: t.paused() }} onClick={t.togglePause}>
               <Icon n={t.paused() ? 'play_arrow' : 'pause'} /> {t.paused() ? 'Resume' : 'Pause'}
             </button>
-          </Show>
-          <Show when={t.live()}>
-            <span class="live-badge"><span class="live-dot" classList={{ idle: t.feedIdle() }} /> {t.feedIdle() ? 'IDLE' : 'LIVE'} · {t.userName()}</span>
           </Show>
         </div>
       </div>
@@ -100,7 +103,7 @@ export default function Scanner() {
         </Show>
       </div>
 
-      <SymbolTable order={t.order()} sort={t.sort()} sortDir={t.sortDir()} onSort={t.cycleSort} onOpen={(m) => navigate('/analytics/' + m.name)} />
+      <SymbolTable order={t.order()} sort={t.sort()} sortDir={t.sortDir()} onSort={t.cycleSort} onOpen={(m) => navigate('/analytics/' + m.name)} onRemove={(m) => removeScannerStock(m.token)} onAdd={() => openPalette('add')} />
 
       {/* bento widgets */}
       <div class="bento">
@@ -172,26 +175,6 @@ export default function Scanner() {
               <div class="v">{Math.round(abovePct())}%</div>
               <div class="l">ABOVE VWAP</div>
             </div>
-          </div>
-        </div>
-
-        <div class="card breakouts">
-          <div class="card-head">
-            <h3><Icon n="history_toggle_off" /> Recent Volume Breakouts <InfoTip id="widget.breakouts" /></h3>
-            <span class="chip">LIVE</span>
-          </div>
-          <div class="bk-list">
-            <Show when={t.alerts().length} fallback={<div class="bk-empty">No spikes yet — try “Trigger spike”.</div>}>
-              <For each={t.alerts()}>
-                {(a) => (
-                  <div class="bk-row">
-                    <span class="bk-name">{a.name}<small>NSE • EQ</small></span>
-                    <span class="bk-surge" classList={{ up: a.tier < 3, down: a.tier === 3 }}>{a.rvol.toFixed(1)}x</span>
-                    <span class="bk-time">{fmtTime(a.ts)}</span>
-                  </div>
-                )}
-              </For>
-            </Show>
           </div>
         </div>
       </div>

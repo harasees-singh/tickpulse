@@ -4,7 +4,10 @@
 
 import { UNIVERSE } from '../data/universe'
 import type { KiteTick } from '../data/kite'
-import { getSettings, updateSettings, subscribeSettings, type BreakoutConfig } from './settings'
+import {
+  getSettings, updateSettings, subscribeSettings, saveSettings,
+  addTokenToWatchlist, removeTokenFromWatchlist, type BreakoutConfig
+} from './settings'
 
 // Re-export so existing `import { BreakoutConfig } from '.../core/store'` works.
 export type { BreakoutConfig }
@@ -119,9 +122,82 @@ export function resolveByName(name: string): number | undefined {
   return nameToIdx.get(name)
 }
 
+/**
+ * Resolve a tradingsymbol to a slot, ADOPTING it from the user's persisted
+ * watchlist metadata if it isn't tracked yet. Case-insensitive. Returns the slot
+ * idx, or -1 when the symbol is unknown locally (caller may then fall back to a
+ * network lookup). This is what makes a deep-link like /analytics/SUZLON work on
+ * a cold reload without depending on the instruments endpoint.
+ */
+export function resolveOrAdoptFromWatchlist(name: string): number {
+  const direct = nameToIdx.get(name)
+  if (direct !== undefined) return direct
+  const up = name.toUpperCase()
+  const meta = getSettings().watchlistMeta
+  for (const token of Object.keys(meta)) {
+    const m = meta[Number(token)]
+    if (m.name.toUpperCase() === up) {
+      return ensureSlot({ token: Number(token), name: m.name, exch: m.exch })
+    }
+  }
+  return -1
+}
+
 /** Seed the local demo universe (default + mock-mode source). Idempotent. */
 export function registerUniverse(): void {
   for (const s of UNIVERSE) ensureSlot(s)
+}
+
+// --- scanner watchlist (the user-editable list shown on the Scanner) ---------
+// Backed by the persisted active watchlist, so it survives reloads and (in live
+// mode) drives socket subscriptions. First-time users are seeded with the base
+// universe so the board is never empty.
+
+/** The active watchlist's tokens as a Set (membership filter for computeOrder). */
+export function activeScannerTokens(): Set<number> {
+  const s = getSettings()
+  const wl = s.watchlists.find((w) => w.id === s.activeWatchlist)
+  return new Set(wl?.tokens ?? [])
+}
+
+/** One-time seed: populate the active watchlist with the base universe so a
+ *  brand-new user opens to 5 stocks. Never re-seeds (respects a user who has
+ *  since removed them all). */
+export function seedScannerWatchlist(): void {
+  const s = getSettings()
+  if (s.scannerSeeded) return
+  const wl = s.watchlists.find((w) => w.id === s.activeWatchlist) ?? s.watchlists[0]
+  if (!wl) return
+  const seen = new Set(wl.tokens)
+  const tokens = [...wl.tokens]
+  const meta = { ...s.watchlistMeta }
+  for (const u of UNIVERSE) {
+    if (!seen.has(u.token)) {
+      tokens.push(u.token)
+      seen.add(u.token)
+    }
+    meta[u.token] = { name: u.name, exch: u.exch }
+  }
+  updateSettings({
+    watchlists: s.watchlists.map((w) => (w.id === wl.id ? { ...w, tokens } : w)),
+    watchlistMeta: meta,
+    scannerSeeded: true
+  })
+  saveSettings()
+}
+
+/** Add a stock to the scanner: allocate its slot + persist it to the active
+ *  watchlist (records the tradingsymbol so it resolves after a reload). */
+export function addScannerStock(spec: SlotSpec): number {
+  const idx = ensureSlot(spec)
+  addTokenToWatchlist(getSettings().activeWatchlist, spec.token, { name: spec.name, exch: spec.exch })
+  return idx
+}
+
+/** Remove a stock from the scanner watchlist (the slot itself is retained; it's
+ *  simply filtered out of the board and, in live mode, unsubscribed). */
+export function removeScannerStock(token: number): void {
+  removeTokenFromWatchlist(getSettings().activeWatchlist, token)
 }
 
 /** Register a batch of instruments (e.g. a live watchlist). Returns their idxs. */
@@ -362,11 +438,14 @@ function vwapDist(i: number): number {
   return vwap[i] > 0 ? (ltp[i] - vwap[i]) / vwap[i] : 0
 }
 
-/** Compute display order (filtered + sorted). Called on a timer, not per frame. */
-export function computeOrder(sort: SortKey, filters: ScanFilters, dir: SortDir = naturalDir(sort)): number[] {
+/** Compute display order (filtered + sorted). Called on a timer, not per frame.
+ *  `members`, when given, restricts the board to those tokens (the scanner
+ *  watchlist); omit it to consider every registered slot. */
+export function computeOrder(sort: SortKey, filters: ScanFilters, dir: SortDir = naturalDir(sort), members?: Set<number>): number[] {
   const f = filters.text.trim().toUpperCase()
   const idxs: number[] = []
   for (let i = 0; i < N; i++) {
+    if (members && !members.has(symbols[i].token)) continue
     if (f && !symbols[i].name.includes(f)) continue
     if (filters.minRvol > 0 && rvol[i] < filters.minRvol) continue
     if (filters.minTurnover > 0 && turnoverOf(i) < filters.minTurnover) continue

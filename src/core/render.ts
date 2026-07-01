@@ -6,6 +6,7 @@ import {
   ltp, chgPct, cumVol, rvol, alertUntil, alertTier, buyFlow, sellFlow,
   vwap, open, low, high, lastTickAt, depth
 } from './store'
+import type { DepthSnapshot } from './store'
 import { fmtPrice, fmtTurnover, fmtAge } from './format'
 import { palette } from './theme'
 import { drawPriceSeries } from './chart'
@@ -28,6 +29,29 @@ export function surgeClass(rvol: number, bp: number): SurgeClass {
 export function surgeArrow(rvol: number, bp: number): '▲' | '▼' | '·' {
   if (rvol < 0.005) return '·'
   return bp >= 0.55 ? '▲' : bp <= 0.45 ? '▼' : '·'
+}
+
+/**
+ * A genuine live market has positive price AND quantity on BOTH sides of the
+ * book. Market-closed snapshots are frequently empty or one-sided (all zeros),
+ * which must NOT render as a live ladder — otherwise the panel shows a lone
+ * ghost row and a bogus full-price "spread" (ask − 0). Locked by render.test.ts.
+ */
+export function depthTwoSided(book: DepthSnapshot | undefined): boolean {
+  if (!book) return false
+  const bid = book.buy.some((l) => l.quantity > 0 && l.price > 0)
+  const ask = book.sell.some((l) => l.quantity > 0 && l.price > 0)
+  return bid && ask
+}
+
+/** Best bid/ask spread, or null when there's no valid two-sided top-of-book (a
+ *  zero on either side, or a crossed quote) — never report ask − 0 as a spread. */
+export function depthSpread(book: DepthSnapshot | undefined): number | null {
+  if (!book || !book.buy[0] || !book.sell[0]) return null
+  const bid = book.buy[0].price
+  const ask = book.sell[0].price
+  if (bid <= 0 || ask <= 0 || ask < bid) return null
+  return ask - bid
 }
 
 export interface RowRefs {

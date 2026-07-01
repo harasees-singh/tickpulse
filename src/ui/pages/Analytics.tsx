@@ -1,12 +1,15 @@
 import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from 'solid-js'
 import { useNavigate, useParams } from '@solidjs/router'
 import { DepthLadder } from '../DepthLadder'
+import { Icon } from '../Icon'
 import {
-  resolveByName, ensureSlot, symbols, ltp, chgPct, rvol, open, high, low, vwap, prevClose,
+  resolveByName, resolveOrAdoptFromWatchlist, ensureSlot, addScannerStock, activeScannerTokens,
+  symbols, ltp, chgPct, rvol, open, high, low, vwap, prevClose,
   turnoverOf, oi, cumDelta, buyQty, sellQty, cumVol
 } from '../../core/store'
 import { drawAnalyticsChart, makeChartState } from '../../core/chart'
 import { fmtPrice, fmtVol, fmtTurnover } from '../../core/format'
+import { openKiteOrder } from '../kiteOrder'
 import { SHORTCUT_LABEL } from '../CommandPalette'
 
 // Per-symbol deep dive (DEV_PLAN §2.4) at /analytics/:symbol. Reads the live SoA
@@ -26,34 +29,55 @@ export default function Analytics() {
   })
 
   const [bumpResolve, setBumpResolve] = createSignal(0)
-  const idx = createMemo(() => (bumpResolve(), resolveByName(params.symbol ?? '')))
   const [resolving, setResolving] = createSignal(false)
 
-  // Deep-link to ANY symbol — if it isn't tracked yet (e.g. a URL pasted
-  // directly, no Scanner/palette involved), look it up in the instruments
-  // dump and register a slot so the page can render. Decoupled from Scanner.
+  // A cheap 250ms tick drives the live readouts AND re-resolves the slot, so the
+  // page self-heals the instant the symbol is registered (by the auth gate's
+  // watchlist hydration, the palette, or the lookup below) — nameToIdx isn't a
+  // reactive source, so without this a late registration would go unnoticed.
+  const [tick, setTick] = createSignal(0)
+  onMount(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 250)
+    onCleanup(() => clearInterval(id))
+  })
+
+  const idx = createMemo(() => (bumpResolve(), tick(), resolveByName(params.symbol ?? '')))
+
+  // Deep-link to ANY symbol. Resolve in order of reliability:
+  //   1) the persisted watchlist (offline, instant) — fixes "I added SUZLON but
+  //      Analytics can't find it after a reload",
+  //   2) the public instruments dump for arbitrary URLs never added locally.
+  // Register a slot + (if the URL case differs) redirect to the canonical
+  // tradingsymbol so nameToIdx resolves.
   createEffect(() => {
     const sym = params.symbol
     if (!sym || resolveByName(sym)) return
+
+    const local = resolveOrAdoptFromWatchlist(sym)
+    if (local >= 0) {
+      const canonical = symbols[local].name
+      if (canonical !== sym) navigate('/analytics/' + canonical, { replace: true })
+      else setBumpResolve((n) => n + 1)
+      return
+    }
+
     setResolving(true)
     fetch('/auth/instruments?exchange=NSE&limit=1&q=' + encodeURIComponent(sym))
       .then((r) => r.json())
       .then((rows: { instrument_token: number; tradingsymbol: string; exchange: string }[]) => {
-        const hit = rows?.find?.((r) => r.tradingsymbol.toUpperCase() === sym.toUpperCase()) ?? rows?.[0]
+        const hit = Array.isArray(rows)
+          ? rows.find((r) => r.tradingsymbol.toUpperCase() === sym.toUpperCase()) ?? rows[0]
+          : undefined
         if (hit) {
           ensureSlot({ token: hit.instrument_token, name: hit.tradingsymbol, exch: hit.exchange })
-          setBumpResolve((n) => n + 1) // re-evaluate `idx`
+          if (hit.tradingsymbol !== sym) navigate('/analytics/' + hit.tradingsymbol, { replace: true })
+          else setBumpResolve((n) => n + 1) // re-evaluate `idx`
         }
       })
       .catch(() => {})
       .finally(() => setResolving(false))
   })
 
-  const [tick, setTick] = createSignal(0)
-  onMount(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 250)
-    onCleanup(() => clearInterval(id))
-  })
 
   // Accessors that track `tick` and read the resolved slot.
   const at = (arr: Float64Array) => () => (tick(), idx() !== undefined ? arr[idx()!] : 0)
@@ -74,8 +98,25 @@ export default function Analytics() {
   const name = () => (idx() !== undefined ? symbols[idx()!].name : (params.symbol ?? ''))
   const exch = () => (idx() !== undefined ? symbols[idx()!].exch : '')
 
+  // Is this symbol already on the scanner board? (tick() keeps it live.)
+  const inScanner = () => {
+    tick()
+    return idx() !== undefined && activeScannerTokens().has(symbols[idx()!].token)
+  }
+  // Add to the scanner watchlist, then jump to the board so the user sees it land.
+  function addToScanner() {
+    const i = idx()
+    if (i === undefined) return
+    const m = symbols[i]
+    addScannerStock({ token: m.token, name: m.name, exch: m.exch })
+    navigate('/scanner')
+  }
+
   const chgCls = () => (chgV() > 0.01 ? 'up' : chgV() < -0.01 ? 'down' : 'flat')
   const flowTot = () => buyQtyV() + sellQtyV()
+  // Real order-flow needs pending quantity on BOTH sides. Market-closed snapshots
+  // are empty or one-sided, which would otherwise read as an alarming 0%/100%.
+  const hasFlow = () => buyQtyV() > 0 && sellQtyV() > 0
   const buyPct = () => (flowTot() ? (buyQtyV() / flowTot()) * 100 : 50)
 
   // Hero chart — rAF loop with an eased Y-scale so updates glide instead of
@@ -129,6 +170,18 @@ export default function Analytics() {
             <span class={'chg-pill ' + chgCls()}>{(chgV() > 0 ? '+' : '') + chgV().toFixed(2)}%</span>
             <span class="ana-rvol">{rvolV().toFixed(2)}× RVOL</span>
           </div>
+          <div class="ana-actions">
+            <button class="ord-btn buy" onClick={() => openKiteOrder('BUY', name(), exch())} title={`Buy ${name()} on Kite`}>BUY</button>
+            <button class="ord-btn sell" onClick={() => openKiteOrder('SELL', name(), exch())} title={`Sell ${name()} on Kite`}>SELL</button>
+            <button
+              class="btn-add-scan"
+              classList={{ added: inScanner() }}
+              onClick={() => (inScanner() ? navigate('/scanner') : addToScanner())}
+              title={inScanner() ? 'Already on your scanner — go to the board' : 'Add this symbol to your scanner'}
+            >
+              <Icon n={inScanner() ? 'check_circle' : 'add_circle'} /> {inScanner() ? 'In scanner' : 'Add to scanner'}
+            </button>
+          </div>
         </div>
 
         <div class="ana-grid">
@@ -147,8 +200,10 @@ export default function Analytics() {
           <div class="card ana-side">
             <div class="ana-block">
               <div class="ana-block-h">Order-flow pressure</div>
-              <div class="press-track"><div class="press-bar buy" style={{ width: buyPct() + '%' }} /></div>
-              <div class="ana-flow-labels"><span class="up">{Math.round(buyPct())}% BUY</span><span class="down">{Math.round(100 - buyPct())}% SELL</span></div>
+              <Show when={hasFlow()} fallback={<div class="ana-flow-empty">No live order-flow — market closed.</div>}>
+                <div class="press-track"><div class="press-bar buy" style={{ width: buyPct() + '%' }} /></div>
+                <div class="ana-flow-labels"><span class="up">{Math.round(buyPct())}% BUY</span><span class="down">{Math.round(100 - buyPct())}% SELL</span></div>
+              </Show>
             </div>
             <div class="ana-block">
               <div class="ana-block-h">5-level depth ladder</div>

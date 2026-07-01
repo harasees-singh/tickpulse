@@ -1,5 +1,6 @@
 import { Index, Show } from 'solid-js'
 import { depth } from '../core/store'
+import { depthTwoSided, depthSpread } from '../core/render'
 import { fmtPrice, fmtQty } from '../core/format'
 
 // 5-level bid/ask ladder for one symbol, reading the live depth snapshot.
@@ -13,6 +14,11 @@ export function DepthLadder(props: { idx: number; tick: number }) {
     void props.tick // track for live refresh
     return depth[props.idx]
   }
+  // A genuine live market has liquidity on BOTH sides. Market-closed snapshots
+  // are frequently empty or one-sided (zero prices/quantities), which otherwise
+  // render as a lone ghost row plus a bogus full-price "spread". Treat anything
+  // that isn't two-sided as no-data so the panel degrades cleanly.
+  const twoSided = () => depthTwoSided(book())
   const asks = () => {
     const d = book()
     if (!d) return [] as { price: number; quantity: number }[]
@@ -36,12 +42,11 @@ export function DepthLadder(props: { idx: number; tick: number }) {
     return m
   }
   const spread = () => {
-    const d = book()
-    if (!d || !d.buy[0] || !d.sell[0]) return '—'
-    return fmtPrice(d.sell[0].price - d.buy[0].price)
+    const s = depthSpread(book())
+    return s === null ? '—' : fmtPrice(s)
   }
   return (
-    <Show when={book()} fallback={<div class="ladder-empty">No depth data yet.</div>}>
+    <Show when={twoSided()} fallback={<div class="ladder-empty">No live depth — market closed.</div>}>
       <div class="ladder">
         <Index each={asks()}>
           {(level) => (
