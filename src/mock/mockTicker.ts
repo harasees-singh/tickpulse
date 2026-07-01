@@ -9,6 +9,7 @@ export class MockTicker implements Ticker {
   private tickHandlers: TickHandler[] = []
   private connectHandlers: Array<() => void> = []
   private disconnectHandlers: Array<() => void> = []
+  private authErrorHandlers: Array<() => void> = [] // never fires; mock can't lose auth
   private latency = 0
   private latencyInit = false
 
@@ -46,10 +47,12 @@ export class MockTicker implements Ticker {
   on(ev: 'ticks', cb: TickHandler): void
   on(ev: 'connect', cb: () => void): void
   on(ev: 'disconnect', cb: () => void): void
+  on(ev: 'authError', cb: () => void): void
   on(ev: string, cb: any): void {
     if (ev === 'ticks') this.tickHandlers.push(cb)
     else if (ev === 'connect') this.connectHandlers.push(cb)
     else if (ev === 'disconnect') this.disconnectHandlers.push(cb)
+    else if (ev === 'authError') this.authErrorHandlers.push(cb)
   }
 
   // --- mock-only controls (wired to the UI; absent on the real adapter) ---

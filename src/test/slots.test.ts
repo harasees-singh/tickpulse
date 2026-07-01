@@ -27,7 +27,30 @@ describe('store — slot allocator', () => {
     const idx2 = S.ensureSlot({ token: 9_000_002, name: 'DUP-AGAIN', exch: 'NSE', base: 99 })
     expect(idx2).toBe(idx1)
     expect(S.N).toBe(n1)
-    expect(S.symbols[idx1].name).toBe('DUP') // first registration wins
+    expect(S.symbols[idx1].name).toBe('DUP') // first REAL registration wins
+  })
+
+  it('upgrades a numeric-placeholder name when the real tradingsymbol arrives later', () => {
+    const token = 9_100_000
+    // Simulate a live watchlist slot created before its metadata resolved.
+    const idx = S.ensureSlot({ token, name: String(token), exch: 'NSE' })
+    expect(S.symbols[idx].name).toBe(String(token))
+    expect(S.resolveByName(String(token))).toBe(idx)
+
+    // Real name arrives (wlMeta registration / a search selection).
+    const again = S.ensureSlot({ token, name: 'ACMECORP', exch: 'BSE' })
+    expect(again).toBe(idx) // same slot, no growth
+    expect(S.symbols[idx].name).toBe('ACMECORP') // upgraded in place
+    expect(S.symbols[idx].exch).toBe('BSE')
+    expect(S.resolveByName('ACMECORP')).toBe(idx) // nameToIdx re-pointed
+    expect(S.resolveByName(String(token))).toBeUndefined() // stale mapping cleared
+  })
+
+  it('never downgrades a real name back to a numeric placeholder', () => {
+    const token = 9_100_001
+    const idx = S.ensureSlot({ token, name: 'GENUINE', exch: 'NSE' })
+    S.ensureSlot({ token, name: String(token), exch: 'NSE' }) // placeholder re-register
+    expect(S.symbols[idx].name).toBe('GENUINE')
   })
 
   it('defaults the seed to 0 when base is omitted', () => {

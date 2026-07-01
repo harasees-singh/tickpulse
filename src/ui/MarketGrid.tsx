@@ -24,11 +24,15 @@ export function MarketGrid(props: {
     props.tokens.map((token) => {
       const idx = tokenToIdx.get(token)
       const m = props.metaOf(token)
+      // Prefer the store's resolved name — unless it's still the numeric-token
+      // placeholder, in which case the persisted watchlistMeta name wins.
+      const storeName = idx !== undefined ? symbols[idx].name : undefined
+      const resolved = storeName && storeName !== String(token) ? storeName : m?.name
       return {
         token,
         idx,
-        name: idx !== undefined ? symbols[idx].name : m?.name ?? String(token),
-        exch: idx !== undefined ? symbols[idx].exch : m?.exch ?? 'NSE'
+        name: resolved ?? String(token),
+        exch: (idx !== undefined ? symbols[idx].exch : undefined) ?? m?.exch ?? 'NSE'
       }
     })
 

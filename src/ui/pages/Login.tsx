@@ -5,7 +5,8 @@ const MESSAGES: Record<string, string> = {
   config: 'Broker API keys are not configured on the server.',
   denied: 'Sign-in was cancelled.',
   failed: 'Sign-in failed — please try again.',
-  error: 'Something went wrong during sign-in.'
+  error: 'Something went wrong during sign-in.',
+  expired: 'Your session expired — please sign in again to refresh the token.'
 }
 
 // Login gate — shown when there's no Zerodha session. Sign-in is a full-page
@@ -18,8 +19,8 @@ export default function Login() {
         <h1>TickPulse</h1>
         <p class="auth-sub">Real-time NSE volume &amp; order-flow terminal.</p>
 
-        <Show when={authStatus && MESSAGES[authStatus]}>
-          <div class="auth-msg">{MESSAGES[authStatus!]}</div>
+        <Show when={authStatus() && MESSAGES[authStatus()!]}>
+          <div class="auth-msg">{MESSAGES[authStatus()!]}</div>
         </Show>
 
         <button class="btn-primary auth-btn" onClick={() => (window.location.href = '/auth/login')}>

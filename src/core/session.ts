@@ -19,8 +19,12 @@ const [session, setSession] = createSignal<SessionInfo | undefined>(undefined) /
 export { session }
 
 // The OAuth redirect leaves a `?auth=<status>` marker — capture it once at load,
-// before we strip it from the URL.
-export const authStatus = new URLSearchParams(window.location.search).get('auth')
+// before we strip it from the URL. It's a signal so a mid-session token expiry
+// can push an `expired` status onto the Login screen.
+const [authStatus, setAuthStatus] = createSignal<string | null>(
+  new URLSearchParams(window.location.search).get('auth')
+)
+export { authStatus }
 
 let inflight: Promise<void> | null = null
 /** Fetch the Zerodha session once (deduped). */
@@ -35,6 +39,19 @@ export function loadSession(): Promise<void> {
       setSession({ connected: false })
     })
   return inflight
+}
+
+/** Re-fetch `/auth/session` from scratch (used after a suspected token expiry). */
+export function reloadSession(): Promise<void> {
+  inflight = null
+  return loadSession()
+}
+
+/** Force the app back to Login (token died mid-session). Flips the auth gate by
+ *  clearing the session signal and surfaces an explanatory message. */
+export function revokeSession(): void {
+  setSession({ connected: false })
+  setAuthStatus('expired')
 }
 
 /** Strip the post-OAuth `?auth=…` query without a navigation. */

@@ -93,6 +93,14 @@ export class KiteTickerAdapter implements Ticker {
   private tickHandlers: TickHandler[] = []
   private connectHandlers: Array<() => void> = []
   private disconnectHandlers: Array<() => void> = []
+  private authErrorHandlers: Array<() => void> = []
+
+  // A dead/expired access_token yields sockets that close WITHOUT ever delivering
+  // a frame — Kite completes the handshake (onopen fires) then drops us, sending
+  // nothing. We count those data-less sockets and, once it's clearly not a
+  // transient blip, raise `authError` a single time so the UI can re-auth.
+  private consecutiveOpenFailures = 0
+  private authErrorFired = false
 
   private latency = 0
   private latencyInit = false
@@ -113,8 +121,13 @@ export class KiteTickerAdapter implements Ticker {
     const ws = new WebSocket(this.url)
     ws.binaryType = 'arraybuffer'
     this.ws = ws
+    let gotData = false // has THIS socket delivered a real (binary) frame yet?
 
     ws.onopen = () => {
+      // Handshake done — but Kite completes the handshake even for a DEAD
+      // access_token, then closes without sending anything. So `onopen` is NOT
+      // proof of a valid session; only real frames are (see onmessage). Fire the
+      // subscribe/mode requests optimistically.
       this.reconnectDelay = 1000
       this.connectHandlers.forEach((h) => h())
       this.send({ a: 'subscribe', v: this.tokens })
@@ -122,7 +135,14 @@ export class KiteTickerAdapter implements Ticker {
     }
 
     ws.onmessage = (e: MessageEvent) => {
-      if (typeof e.data === 'string') return // text postbacks/errors — ignore (read-only)
+      if (typeof e.data === 'string') return // text postbacks/errors — NOT a live feed
+      // First BINARY frame (incl. the 1-byte heartbeat Kite sends every second)
+      // proves the token was accepted — disarm the auth-failure tripwire.
+      if (!gotData) {
+        gotData = true
+        this.consecutiveOpenFailures = 0
+        this.authErrorFired = false
+      }
       const buf = e.data as ArrayBuffer
       if (buf.byteLength < 2) return // 1-byte heartbeat
       const ticks = parseBinary(buf)
@@ -154,10 +174,25 @@ export class KiteTickerAdapter implements Ticker {
 
     ws.onclose = () => {
       this.disconnectHandlers.forEach((h) => h())
-      if (this.shouldRun) {
-        setTimeout(() => this.open(), this.reconnectDelay)
-        this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000)
+      if (!this.shouldRun) return
+
+      // Closed WITHOUT ever delivering a data frame → a dead/expired access_token
+      // (Kite accepts the handshake, sends nothing, then drops us) or a stillborn
+      // socket. A couple in a row while genuinely online means the session is
+      // gone — raise authError instead of retrying a doomed connection forever.
+      if (!gotData) this.consecutiveOpenFailures++
+      if (
+        this.consecutiveOpenFailures >= 2 &&
+        !this.authErrorFired &&
+        (typeof navigator === 'undefined' || navigator.onLine)
+      ) {
+        this.authErrorFired = true
+        this.authErrorHandlers.forEach((h) => h())
+        return // stop the retry loop; a fresh connect() re-arms it
       }
+
+      setTimeout(() => this.open(), this.reconnectDelay)
+      this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000)
     }
 
     ws.onerror = () => {
@@ -200,10 +235,12 @@ export class KiteTickerAdapter implements Ticker {
   on(ev: 'ticks', cb: TickHandler): void
   on(ev: 'connect', cb: () => void): void
   on(ev: 'disconnect', cb: () => void): void
+  on(ev: 'authError', cb: () => void): void
   on(ev: string, cb: any): void {
     if (ev === 'ticks') this.tickHandlers.push(cb)
     else if (ev === 'connect') this.connectHandlers.push(cb)
     else if (ev === 'disconnect') this.disconnectHandlers.push(cb)
+    else if (ev === 'authError') this.authErrorHandlers.push(cb)
   }
 
   // Browser WebSockets can't send ping frames; feed latency is derived from the

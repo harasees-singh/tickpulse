@@ -49,6 +49,10 @@ export interface TickerClient {
   on(ev: 'ticks', cb: TickHandler): void
   on(ev: 'connect', cb: () => void): void
   on(ev: 'disconnect', cb: () => void): void
+  /** Fired once when the socket repeatedly fails to open — likely a dead
+   *  access_token. UI reacts by re-checking `/auth/session` and, if the server
+   *  agrees, routing the user back to Login to refresh the token. */
+  on(ev: 'authError', cb: () => void): void
 }
 
 /** TickerClient + the telemetry the UI reads. Both MockTicker and the live

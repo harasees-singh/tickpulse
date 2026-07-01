@@ -492,6 +492,7 @@ a.avatar, a.btn-primary, a.ghost-btn { text-decoration: none; }
 .ws-status { position: fixed; bottom: 16px; right: 16px; background: var(--inverse); color: var(--inverse-on); padding: 8px 14px; border-radius: 8px; display: flex; align-items: center; gap: 12px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18); z-index: 60; }
 .ws-status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--secondary-container); box-shadow: 0 0 8px var(--secondary-container); animation: pulse 1.8s ease-in-out infinite; }
 .ws-status .dot.off { background: var(--outline); box-shadow: none; animation: none; }
+.ws-status .dot.bad { background: var(--chart-down); box-shadow: 0 0 8px var(--chart-down); animation: none; }
 .ws-col { display: flex; flex-direction: column; line-height: 1.25; min-width: 66px; }
 .ws-col .k { font-size: 10px; letter-spacing: 0.06em; opacity: 0.7; }
 .ws-col .v { font-size: 12px; font-variant-numeric: tabular-nums; }

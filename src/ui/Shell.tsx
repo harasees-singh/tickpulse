@@ -10,7 +10,7 @@ import {
 } from '../core/store'
 import { startPump } from '../core/render'
 import { updateSettings, getSettings, subscribeSettings, type Theme } from '../core/settings'
-import { session, useMock } from '../core/session'
+import { session, useMock, revokeSession } from '../core/session'
 import { helpText } from '../core/help'
 import { Icon } from './Icon'
 import { CommandPalette, openPalette, SHORTCUT_KEYS, SHORTCUT_LABEL } from './CommandPalette'
@@ -40,6 +40,7 @@ export default function Shell(props: RouteSectionProps) {
   const [buy, setBuy] = createSignal(0)
   const [sell, setSell] = createSignal(0)
   const [wsLat, setWsLat] = createSignal(0)
+  const [wsConnected, setWsConnected] = createSignal(false)
   const [online, setOnline] = createSignal(navigator.onLine)
   const [netType, setNetType] = createSignal('')
   const [netRtt, setNetRtt] = createSignal<number | null>(null)
@@ -93,19 +94,31 @@ export default function Shell(props: RouteSectionProps) {
       setUserName(sess?.user_name ?? sess?.user_id ?? null)
     }
     ticker.on('ticks', ingest)
+    // Reflect real socket state in the WS pill (green + latency vs red OFFLINE).
+    // Register BEFORE connect() so MockTicker's synchronous connect is caught.
+    ticker.on('connect', () => setWsConnected(true))
+    ticker.on('disconnect', () => setWsConnected(false))
+    // Repeated data-less sockets ⇒ the access_token is dead. The socket is the
+    // only component that truly knows this — the server's /auth/session only
+    // checks the cookie, which outlives the daily Kite token — so trust it and
+    // drop the user on Login to refresh the token.
+    ticker.on('authError', () => revokeSession())
     ticker.connect()
   }
 
   onMount(() => {
-    startTicker()
-
-    // Re-register persisted watchlist instruments so their names resolve after a
-    // reload, and (live only) subscribe/unsubscribe as the active watchlist edits.
+    // Re-register persisted watchlist instruments FIRST, so their real names are
+    // in the store before the ticker seeds any slots (otherwise a live watchlist
+    // token would be created with its numeric id as the name). Live subscribe/
+    // unsubscribe follows as the active watchlist edits.
     const wlMeta = getSettings().watchlistMeta
     for (const k of Object.keys(wlMeta)) {
       const m = wlMeta[Number(k)]
       ensureSlot({ token: Number(k), name: m.name, exch: m.exch })
     }
+
+    startTicker()
+
     let subscribed = new Set<number>()
     const syncSubscriptions = () => {
       if (!live() || !ticker) return
@@ -311,7 +324,10 @@ export default function Shell(props: RouteSectionProps) {
     return ' · ' + Math.round(r) + ' ms'
   }
   const latText = () => (wsLat() < 10 ? wsLat().toFixed(1) : Math.round(wsLat()).toString())
-  const latCls = () => (wsLat() < 50 ? '' : wsLat() < 150 ? 'warn' : 'bad')
+  const latCls = () => {
+    if (!paused() && !wsConnected()) return 'bad' // socket down → red
+    return wsLat() < 50 ? '' : wsLat() < 150 ? 'warn' : 'bad'
+  }
 
   const ctx: TerminalCtx = {
     sort, setSort, filters, setFilters, order, alerts, live, userName, feedIdle,
@@ -383,10 +399,16 @@ export default function Shell(props: RouteSectionProps) {
 
         {/* WS status pill — real-time WebSocket telemetry */}
         <div class="ws-status">
-          <span class="dot" classList={{ off: paused() }} title={paused() ? 'Paused' : 'Live'} />
+          <span
+            class="dot"
+            classList={{ off: paused(), bad: !paused() && !wsConnected() }}
+            title={paused() ? 'Paused' : wsConnected() ? 'Live' : 'Disconnected'}
+          />
           <div class="ws-col" title={helpText('ws.ping')}>
             <span class="k">WS PING</span>
-            <span class="v" classList={{ [latCls()]: !!latCls() }}>{paused() ? '—' : latText() + ' ms'}</span>
+            <span class="v" classList={{ [latCls()]: !!latCls() }}>
+              {paused() ? '—' : !wsConnected() ? 'OFFLINE' : latText() + ' ms'}
+            </span>
           </div>
           <span class="ws-sep" />
           <div class="ws-col" title={helpText('ws.throughput')}>

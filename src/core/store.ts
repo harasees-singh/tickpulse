@@ -82,7 +82,19 @@ export interface SlotSpec {
  */
 export function ensureSlot(s: SlotSpec): number {
   const existing = tokenToIdx.get(s.token)
-  if (existing !== undefined) return existing
+  if (existing !== undefined) {
+    // Slot already exists — but if it was created with the numeric-token
+    // placeholder (name === String(token)) and a real tradingsymbol arrives now,
+    // upgrade it in place so downstream pages stop showing the raw token id.
+    const meta = symbols[existing]
+    if (s.name && s.name !== meta.name && meta.name === String(s.token)) {
+      nameToIdx.delete(meta.name)
+      meta.name = s.name
+      meta.exch = s.exch
+      nameToIdx.set(s.name, existing)
+    }
+    return existing
+  }
   if (N >= MAX_N) {
     console.warn(`[store] slot capacity ${MAX_N} reached; dropping ${s.name}`)
     return -1
@@ -138,8 +150,16 @@ export function applyWatchlist(opts: { live: boolean; instruments?: SlotSpec[] }
   const wl = s.watchlists.find((w) => w.id === s.activeWatchlist)
   const wlTokens = wl && wl.enabled ? wl.tokens : []
   if (opts.live && wlTokens.length > 0) {
+    // Resolve each token's real tradingsymbol from the persisted watchlistMeta
+    // (recorded when the user added it via search). Only truly-unknown tokens
+    // fall back to their numeric id — never overwrite a known name with it.
+    const meta = s.watchlistMeta
     const specs: SlotSpec[] =
-      opts.instruments ?? wlTokens.map((token) => ({ token, name: String(token), exch: 'NSE' }))
+      opts.instruments ??
+      wlTokens.map((token) => {
+        const m = meta[token]
+        return { token, name: m?.name ?? String(token), exch: m?.exch ?? 'NSE' }
+      })
     return { tokens: wlTokens, idxs: registerInstruments(specs), source: 'watchlist' }
   }
   registerUniverse()
